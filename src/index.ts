@@ -9,6 +9,11 @@ import { LearningMemoryStore } from './learning';
 import { LLMClient } from './ai';
 import { Sandbox } from './sandbox';
 import { ShadowLimiter } from './shadowLimiter';
+import { MetricsAnalyzer } from './metricsAnalyzer';
+import { EndpointTracker } from './endpointTracker';
+import { ProductionManager } from './productionManager';
+import { DynamicRouter } from './dynamicRouter';
+import { PersistentVersionManager, FileStorageAdapter } from './persistentVersionManager';
 import { createListener } from './middleware';
 import { createStudioHandler } from './studio';
 
@@ -26,9 +31,17 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   const learning = new LearningMemoryStore();
   const shadow = new ShadowTestEngine();
   const shadowLimiter = new ShadowLimiter(config);
+  const metricsAnalyzer = new MetricsAnalyzer();
+  const endpointTracker = new EndpointTracker();
+  const productionManager = new ProductionManager(config);
+  const dynamicRouter = new DynamicRouter(productionManager);
+  
+  // Persistent version management
+  const storageAdapter = new FileStorageAdapter(config.storagePath || './.seim-storage');
+  const versionManager = new PersistentVersionManager(config, storageAdapter);
 
   const instance: any = {
-    listener: createListener(config, { metrics, optimization, validation, shadow, rollback, learning, sandbox, shadowLimiter }),
+    listener: createListener(config, { metrics, optimization, validation, shadow, rollback, learning, sandbox, shadowLimiter, metricsAnalyzer, endpointTracker }),
     status: (): SeimStatus => ({
       mode: config.mode,
       uptime: process.uptime(),
@@ -41,6 +54,10 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
     }),
     config,
     metrics,
+    endpointTracker,
+    productionManager,
+    dynamicRouter,
+    versionManager,
   };
   instance.dashboard = createStudioHandler(instance as SeimInstance);
 

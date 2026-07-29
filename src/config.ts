@@ -1,13 +1,14 @@
 import { SeimConfig, SeimMode } from './types';
 
 export const DEFAULT_STUDIO_PATH = '/asdfghjklkjhgfdsasdfghj';
+export const DEFAULT_STORAGE_PATH = './.seim-storage';
 
 export const DEFAULT_SECURITY_CONFIG: NonNullable<SeimConfig['security']> = {
   blockAuthenticationChanges: true,
   blockAuthorizationChanges: true,
   blockPaymentChanges: true,
   blockSecretUsage: true,
-  allowedPatternModels: ['sequential-async', 'n-plus-one', 'missing-cache', 'inefficient-loop', 'redundant-serialization', 'blocking-op'],
+  allowedPatternModels: ['sequential-async', 'n-plus-one', 'missing-cache', 'inefficient-loop', 'redundant-serialization', 'blocking-op', 'nested-ternary', 'ai-detected'],
 };
 
 export const DEFAULT_EXPERIMENT_CONFIG: NonNullable<SeimConfig['experiment']> = {
@@ -18,12 +19,14 @@ export const DEFAULT_EXPERIMENT_CONFIG: NonNullable<SeimConfig['experiment']> = 
   minSampleSize: 100,
   shadowCooldownMs: 60000,
   shadowAllowedMethods: ['GET'],
+  shadowSampleSize: 25,
 };
 
 export function getDefaultConfig(): SeimConfig {
   return {
     mode: 'restrict' as SeimMode,
     studioPath: DEFAULT_STUDIO_PATH,
+    storagePath: DEFAULT_STORAGE_PATH,
     businessRules: [],
     securityRules: [],
     ai: {
@@ -40,6 +43,7 @@ export function getDefaultConfig(): SeimConfig {
     security: { ...DEFAULT_SECURITY_CONFIG },
     learning: {
       enabled: true,
+      sampleSize: 50,
     },
   };
 }
@@ -49,6 +53,7 @@ export function mergeConfig(user: Partial<SeimConfig> = {}): SeimConfig {
   return {
     ...defaults,
     ...user,
+    storagePath: user.storagePath ?? DEFAULT_STORAGE_PATH,
     businessRules: [...(user.businessRules ?? defaults.businessRules)],
     securityRules: [...(user.securityRules ?? defaults.securityRules)],
     ai: { ...defaults.ai, ...user.ai },

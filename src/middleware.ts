@@ -8,6 +8,8 @@ import { RollbackEngine } from './rollback';
 import { LearningMemoryStore } from './learning';
 import { Sandbox } from './sandbox';
 import { ShadowLimiter } from './shadowLimiter';
+import { MetricsAnalyzer } from './metricsAnalyzer';
+import { EndpointTracker } from './endpointTracker';
 
 interface RouteHandlerInfo {
   route: any;
@@ -25,6 +27,8 @@ export function createListener(config: SeimConfig, deps: {
   learning: LearningMemoryStore;
   sandbox: Sandbox;
   shadowLimiter: ShadowLimiter;
+  metricsAnalyzer: MetricsAnalyzer;
+  endpointTracker: EndpointTracker;
 }): () => RequestHandler {
   return function listener(): RequestHandler {
     return function seimListener(req: Request, res: Response, next: NextFunction): void {
@@ -65,12 +69,43 @@ export function createListener(config: SeimConfig, deps: {
         if (!deps.shadowLimiter.canRun(req, routeKey)) return;
         if (Math.random() * 100 >= config.experiment.canaryPercent) return;
 
+        // Check if the route has enough samples before analysis
+        const routeMetrics = deps.metrics.forRoute(routeKey);
+        if (config.learning.enabled && routeMetrics && routeMetrics.requestCount < config.learning.sampleSize) {
+          return;
+        }
+
+        // Check if endpoint is marked as non-optimizable
+        if (deps.endpointTracker.shouldSkipOptimization(routeKey)) {
+          return;
+        }
+
+        // Analyze metrics to determine if optimization is needed
+        if (routeMetrics) {
+          const analysis = deps.metricsAnalyzer.analyze(routeKey, routeMetrics);
+          if (!analysis.needsOptimization) {
+            // Performance is good, mark as optimizable but skip for now
+            deps.endpointTracker.markAsOptimizable(routeKey);
+            return;
+          }
+        }
+
         const routeInfo = findRouteHandler(req);
         if (!routeInfo) return;
 
-        const candidates = await deps.optimization.analyze(routeKey, routeInfo.source);
+        const candidates = await deps.optimization.analyzeWithMetricsCheck(
+          routeKey, 
+          routeInfo.source, 
+          routeMetrics,
+          deps.endpointTracker
+        );
+        
         for (const candidate of candidates) {
           if (!candidate.optimizedCode) continue;
+          
+          // Record optimization attempt
+          deps.endpointTracker.recordOptimizationAttempt(routeKey);
+          
           const optimized = buildOptimizedHandler(candidate, deps.sandbox);
           try {
             const result = await deps.shadow.run(routeKey, routeInfo.handle, optimized, req);
@@ -78,12 +113,21 @@ export function createListener(config: SeimConfig, deps: {
             if (validated.overall) {
               deps.rollback.registerShadow(routeKey, { route: routeInfo.route, index: routeInfo.index }, routeInfo.handle, optimized);
               const report = deps.shadow.getReport(routeKey);
-              if (report) {
-                deps.rollback.evaluate(routeKey, report);
+              if (report && report.sampleSize >= config.experiment.shadowSampleSize) {
+                const evaluationResult = deps.rollback.evaluate(routeKey, report);
+                
+                // If optimization was promoted, mark as optimizable
+                if (evaluationResult === 'promote') {
+                  deps.endpointTracker.markAsOptimizable(routeKey);
+                }
               }
+            } else {
+              // Validation failed, mark as non-optimizable if this was a metrics-based check
+              deps.endpointTracker.markAsNonOptimizable(routeKey, 'Validation failed: optimized code does not match original behavior');
             }
           } catch {
-            // Do not crash the application on shadow-test failure.
+            // Shadow test failed, mark as non-optimizable
+            deps.endpointTracker.markAsNonOptimizable(routeKey, 'Shadow test failed: execution error');
           }
         }
       });

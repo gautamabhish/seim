@@ -22,6 +22,7 @@ export interface OptimizationCandidate {
 export interface SeimConfig {
   mode: SeimMode;
   studioPath: string;
+  storagePath?: string;
   businessRules: BusinessRule[];
   securityRules: SecurityRule[];
   ai: {
@@ -43,6 +44,7 @@ export interface SeimConfig {
     minSampleSize: number;
     shadowCooldownMs: number;
     shadowAllowedMethods: string[];
+    shadowSampleSize: number;
   };
   storage: {
     type: 'memory' | 'sqlite' | 'redis';
@@ -58,6 +60,7 @@ export interface SeimConfig {
   learning: {
     enabled: boolean;
     persistencePath?: string;
+    sampleSize: number;
   };
 }
 
@@ -155,6 +158,10 @@ export interface SeimInstance {
   status(): SeimStatus;
   config: Readonly<SeimConfig>;
   metrics: MetricsStore;
+  endpointTracker?: any;
+  productionManager?: any;
+  dynamicRouter?: any;
+  versionManager?: any;
 }
 
 export type RequestListener = (req: Request, res: Response, next: NextFunction) => void;

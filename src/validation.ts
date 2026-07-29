@@ -53,7 +53,9 @@ export class ValidationEngine {
   }
 
   private responseEquivalence(a: unknown, b: unknown): { pass: boolean; reason?: string } {
-    const eq = JSON.stringify(a) === JSON.stringify(b);
+    const aStr = JSON.stringify(a) || 'undefined';
+    const bStr = JSON.stringify(b) || 'undefined';
+    const eq = aStr === bStr;
     return eq
       ? { pass: true }
       : { pass: false, reason: 'Optimized response differs from original' };

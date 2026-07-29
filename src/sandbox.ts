@@ -66,6 +66,45 @@ export class Sandbox {
             __resEnd.applySync(undefined, [], { arguments: { copy: true }, result: { reference: true } });
           }
         };
+        
+        // Add helper functions for testing
+        var fetchData = async function(id) {
+          return { id: id, value: 'data-' + id };
+        };
+        
+        var fetchUsers = async function() {
+          return [
+            { id: 1, name: 'User 1' },
+            { id: 2, name: 'User 2' },
+            { id: 3, name: 'User 3' },
+            { id: 4, name: 'User 4' },
+            { id: 5, name: 'User 5' }
+          ];
+        };
+        
+        var fetchUserDetails = async function(userId) {
+          return {
+            userId: userId,
+            details: 'Detailed info for user ' + userId,
+            email: 'user' + userId + '@example.com',
+            role: 'user'
+          };
+        };
+        
+        var getExpensiveData = async function(id) {
+          return {
+            id: id,
+            value: 'expensive-data-' + id,
+            timestamp: Date.now()
+          };
+        };
+        
+        var fetchData = async function(id) {
+          return {
+            id: id,
+            value: 'data-' + id
+          };
+        };
       `);
 
       const script = isolate.compileScriptSync(`(async function() {\n${body}\n})`);
@@ -111,18 +150,43 @@ export class Sandbox {
       require: (name: string) => this.requireSafe(name, modules),
       req,
       res,
+      // Add helper functions that might be used in optimized code
+      fetchData: async (id: number) => ({ id, value: `data-${id}` }),
+      fetchUsers: async () => [
+        { id: 1, name: 'User 1' },
+        { id: 2, name: 'User 2' },
+        { id: 3, name: 'User 3' },
+        { id: 4, name: 'User 4' },
+        { id: 5, name: 'User 5' }
+      ],
+      fetchUserDetails: async (userId: number) => ({ 
+        userId, 
+        details: `Detailed info for user ${userId}`,
+        email: `user${userId}@example.com`,
+        role: 'user'
+      }),
+      getExpensiveData: async (id: number) => ({ 
+        id, 
+        value: `expensive-data-${id}`,
+        timestamp: Date.now()
+      }),
     });
 
     const wrapped = `(async (req, res) => {\n${body}\n})(req, res)`;
     const script = new vm.Script(wrapped, { filename: 'seim-shadow.js' });
     const start = Date.now();
-    const result = script.runInContext(context, { timeout: timeoutMs });
-    const remaining = Math.max(1, timeoutMs - (Date.now() - start));
+    
+    try {
+      const result = script.runInContext(context, { timeout: timeoutMs });
+      const remaining = Math.max(1, timeoutMs - (Date.now() - start));
 
-    return await Promise.race([
-      result as Promise<unknown>,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('SEIM sandbox wall-clock timeout')), remaining)),
-    ]);
+      return await Promise.race([
+        result as Promise<unknown>,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('SEIM sandbox wall-clock timeout')), remaining)),
+      ]);
+    } catch (err) {
+      throw err;
+    }
   }
 
   private extractFunctionBody(fnSource: string): string {

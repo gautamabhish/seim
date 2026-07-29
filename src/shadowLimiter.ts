@@ -13,6 +13,10 @@ export class ShadowLimiter {
     const key = this.key(req, routeKey);
     const now = Date.now();
     const cooldown = this.config.experiment.shadowCooldownMs || 60000;
+    
+    // If cooldown is 0, always allow (for testing)
+    if (cooldown === 0) return true;
+    
     const last = this.lastRun.get(key) || 0;
 
     if (now - last < cooldown) return false;

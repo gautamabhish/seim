@@ -19,7 +19,19 @@ export class LLMClient {
     this.provider = config.ai.provider || this.detectProvider(this.baseUrl);
     this.model = config.ai.generatorModel || this.defaultModel();
     this.headers = config.ai.headers;
-    this.responsePath = config.ai.responsePath;
+    this.responsePath = config.ai.responsePath || this.defaultResponsePath();
+  }
+
+  public async analyzeAndOptimize(sourceCode: string, currentMetrics?: { averageLatency: number; p95: number; p99: number; errorRate: number; requestCount: number }): Promise<{ canOptimize: boolean; reason: string; optimizedCode?: string; pattern?: string }> {
+    if (!this.apiKey) return { canOptimize: false, reason: 'AI disabled (no API key)' };
+    
+    const metricsContext = currentMetrics 
+      ? `\nCurrent performance metrics:\n- Request count: ${currentMetrics.requestCount}\n- Average latency: ${currentMetrics.averageLatency}ms\n- P95 latency: ${currentMetrics.p95}ms\n- P99 latency: ${currentMetrics.p99}ms\n- Error rate: ${(currentMetrics.errorRate * 100).toFixed(2)}%`
+      : '';
+
+    const prompt = this.buildHolisticAnalysisPrompt(sourceCode, metricsContext);
+    const content = await this.chat(this.systemPrompt, prompt);
+    return this.parseHolisticAnalysis(content);
   }
 
   public async optimize(originalSource: string, pattern: string): Promise<string | undefined> {
@@ -54,6 +66,15 @@ export class LLMClient {
         return 'grok-2';
       default:
         return 'gpt-4';
+    }
+  }
+
+  private defaultResponsePath(): string {
+    switch (this.provider) {
+      case 'google':
+        return 'candidates.0.content.parts.0.text';
+      default:
+        return '';
     }
   }
 
@@ -182,6 +203,30 @@ Original handler:
 ${source}`;
   }
 
+  private buildHolisticAnalysisPrompt(source: string, metricsContext: string): string {
+    return `Analyze the following Express route handler code holistically for performance optimization opportunities.
+${metricsContext}
+
+Analyze the code for:
+1. Performance bottlenecks (async operations, inefficient loops, blocking operations)
+2. Code quality issues (redundant operations, memory leaks, unnecessary computations)
+3. Best practices violations (error handling, resource management, security issues)
+4. Architectural improvements (caching opportunities, batching, parallelization)
+
+Based on your analysis, determine if the code can be optimized and whether it would provide meaningful performance improvements given the current metrics.
+
+Respond with JSON only:
+{
+  "canOptimize": true|false,
+  "reason": "detailed explanation of your analysis and decision",
+  "pattern": "identified pattern type (e.g., 'sequential-async', 'n-plus-one', 'inefficient-loop', 'blocking-op', 'cache-miss', 'redundant-operation', 'none')",
+  "optimizedCode": "if canOptimize is true, provide the optimized function body"
+}
+
+Original handler code:
+${source}`;
+  }
+
   private buildReviewPrompt(original: string, optimized: string): string {
     return `Review whether the optimized Express handler preserves the original behavior and does not introduce security issues. Respond with JSON only:
 
@@ -211,5 +256,30 @@ ${optimized}`;
     }
     const pass = !/\b(fail|incorrect|unsafe|reject|wrong|broken)\b/i.test(content);
     return { pass, reason: content.slice(0, 200) };
+  }
+
+  private parseHolisticAnalysis(content: string): { canOptimize: boolean; reason: string; optimizedCode?: string; pattern?: string } {
+    try {
+      const jsonMatch = content.match(/{[\s\S]*}/);
+      if (jsonMatch) {
+        const json = JSON.parse(jsonMatch[0]);
+        return {
+          canOptimize: !!json.canOptimize,
+          reason: json.reason || 'No reason provided',
+          optimizedCode: json.optimizedCode,
+          pattern: json.pattern,
+        };
+      }
+    } catch {
+      // fall through to heuristic
+    }
+    
+    // Heuristic: if content mentions "already optimal", "no further", etc., assume not optimizable
+    const cannotOptimize = /\b(already optimal|no further|cannot be optimized|not worth|minimal impact)\b/i.test(content);
+    return {
+      canOptimize: !cannotOptimize,
+      reason: content.slice(0, 200),
+      pattern: undefined,
+    };
   }
 }

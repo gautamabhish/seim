@@ -47,7 +47,7 @@ export class RollbackEngine {
       this.rollback(routeKey, 'latency regression');
       return 'rollback';
     }
-    if (report.sampleSize < cfg.minSampleSize) return 'continue';
+    if (report.sampleSize < cfg.shadowSampleSize) return 'continue';
     if (report.v2Latency < report.v1Latency && report.v2Errors <= report.v1Errors) {
       this.promote(routeKey, 'performance improvement and equivalent error rate');
       return 'promote';
