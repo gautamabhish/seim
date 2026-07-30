@@ -52,16 +52,17 @@ describe('EndpointTracker', () => {
     it('should mark as non-optimizable after max attempts', () => {
       const newTracker = new EndpointTracker(); // Fresh instance to avoid interference
       
-      // Make 3 attempts (max attempts)
+      // Make 5 attempts (max attempts)
+      newTracker.recordOptimizationAttempt('/api/test');
+      newTracker.recordOptimizationAttempt('/api/test');
       newTracker.recordOptimizationAttempt('/api/test');
       newTracker.recordOptimizationAttempt('/api/test');
       newTracker.recordOptimizationAttempt('/api/test');
 
       const status = newTracker.check('/api/test');
-      // After 3 attempts, it should automatically be marked as non-optimizable by the tracker
-      // The implementation increments the counter before checking, so it shows 4 (initial 0 + 3 increments + 1 more check)
+      // After 5 attempts, it should automatically be marked as non-optimizable by the tracker
       expect(status?.isOptimizable).toBe(false);
-      expect(status?.optimizationAttempts).toBeGreaterThanOrEqual(3);
+      expect(status?.optimizationAttempts).toBeGreaterThanOrEqual(5);
     });
 
     it('should mark as optimizable', () => {

@@ -32,6 +32,10 @@ export class ProductionManager {
     this.startHealthMonitoring();
   }
 
+  public destroy(): void {
+    this.stopMonitoring();
+  }
+
   public startDeployment(routeKey: string, canaryPercent: number = 5): ProductionDeployment {
     const deployment: ProductionDeployment = {
       routeKey,
@@ -120,6 +124,8 @@ export class ProductionManager {
     this.monitoringInterval = setInterval(() => {
       this.runHealthChecks();
     }, 30000);
+    // Don't keep the process alive just for seim health monitoring
+    if (this.monitoringInterval.unref) this.monitoringInterval.unref();
   }
 
   private runHealthChecks(): void {

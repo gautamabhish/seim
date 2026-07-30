@@ -1,6 +1,7 @@
 import { OptimizationCandidate, SeimConfig, RouteMetrics } from './types';
 import { LLMClient } from './ai';
 import { EndpointTracker } from './endpointTracker';
+import { LearningMemoryStore, LearningContext } from './learning';
 
 export class OptimizationEngine {
   constructor(private config: SeimConfig, private llm: LLMClient) {}
@@ -14,7 +15,8 @@ export class OptimizationEngine {
     routeKey: string, 
     sourceCode: string, 
     routeMetrics: RouteMetrics | undefined,
-    endpointTracker: EndpointTracker
+    endpointTracker: EndpointTracker,
+    learningStore?: LearningMemoryStore,
   ): Promise<OptimizationCandidate[]> {
     const candidates: OptimizationCandidate[] = [];
     
@@ -27,9 +29,14 @@ export class OptimizationEngine {
       requestCount: routeMetrics.requestCount,
     } : undefined;
 
+    // Build learning context if store is available
+    const learningContext = learningStore
+      ? learningStore.buildContext('ai-detected', routeKey, this.config.framework ?? 'express', sourceCode)
+      : undefined;
+
     // Use AI-driven holistic analysis instead of pattern matching
     if (this.config.ai.enabled) {
-      const analysis = await this.llm.analyzeAndOptimize(sourceCode, currentMetrics);
+      const analysis = await this.llm.analyzeAndOptimize(sourceCode, currentMetrics, learningContext);
       
       if (!analysis.canOptimize) {
         // AI determined no optimization needed
@@ -39,14 +46,20 @@ export class OptimizationEngine {
 
       // AI found optimization opportunity
       if (analysis.optimizedCode) {
+        // Calibrate confidence based on learning history
+        let confidence = 0.92;
+        if (learningContext) {
+          confidence = learningContext.suggestedConfidence;
+        }
+
         const candidate: OptimizationCandidate = {
           id: `${routeKey}::ai-generated::${Date.now()}`,
           routeKey,
           pattern: analysis.pattern || 'ai-detected',
-          severity: 'high', // AI-detected issues are treated as high priority
+          severity: 'high',
           originalCode: sourceCode,
           optimizedCode: analysis.optimizedCode,
-          confidence: 0.92,
+          confidence,
           status: 'pending',
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -71,6 +84,8 @@ export class OptimizationEngine {
       { id: 'redundant-serialization', regex: /JSON\.parse\(JSON\.stringify\(/, severity: 'medium' as const },
       { id: 'blocking-op', regex: /readFileSync\(|writeFileSync\(|execSync\(/, severity: 'high' as const },
       { id: 'nested-ternary', regex: /\?\s*[^:]+\s*:\s*[^?]+\?\s*[^:]+\s*:/, severity: 'low' as const },
+      { id: 'unindexed-find', regex: /\.find\s*\(\s*\w+\s*=>/, severity: 'low' as const },
+      { id: 'response-streaming', regex: /res\.json\s*\(\s*(?:await\s+)?.*\.map\s*\(/, severity: 'medium' as const },
     ];
 
     const candidates: OptimizationCandidate[] = [];
@@ -141,24 +156,100 @@ export class OptimizationEngine {
         modified = transformed === sourceCode ? sourceCode : transformed;
         break;
       }
-      case 'n-plus-one':
-        modified = `// [SEIM] Batch query: replace per-iteration awaits with a single IN clause or join\n` + sourceCode;
+      case 'n-plus-one': {
+        // Transform: for(...) { await fn(...) } → collect IDs then batch with Promise.all
+        modified = sourceCode.replace(
+          /for\s*\(([^)]*)\)\s*\{([^}]*)(await\s+(\w+)\(([^)]*)\))([^}]*)\}/,
+          (_match, iterExpr, before, _awaitCall, fnName, fnArgs, after) => {
+            const trimBefore = (before as string).trim();
+            const trimAfter = (after as string).trim();
+            const idVar = (fnArgs as string).trim().split(/\s*,\s*/)[0] || 'id';
+            return [
+              `// [SEIM] Batched: collect IDs first, then resolve in parallel`,
+              `const __seimIds = [];`,
+              `for (${iterExpr}) { ${trimBefore} __seimIds.push(${idVar}); ${trimAfter} }`,
+              `const __seimResults = await Promise.all(__seimIds.map(${idVar} => ${fnName}(${fnArgs})));`,
+            ].join('\n');
+          }
+        );
         break;
-      case 'missing-cache':
-        modified = `// [SEIM] Wrap result with cache lookup before falling back to the source\n` + sourceCode;
+      }
+      case 'missing-cache': {
+        // Wrap the get* call with a simple Map cache lookup
+        modified = sourceCode.replace(
+          /(await\s+(get[^\(]*)\(([^\)]*)\))/,
+          (_match, _fullAwait, fnName, args) => {
+            return [
+              `(() => {`,
+              `  const __seimCacheKey = JSON.stringify([${args}]);`,
+              `  if (!globalThis.__seimCache) globalThis.__seimCache = new Map();`,
+              `  if (globalThis.__seimCache.has(__seimCacheKey)) return globalThis.__seimCache.get(__seimCacheKey);`,
+              `  const __seimVal = await ${fnName}(${args});`,
+              `  globalThis.__seimCache.set(__seimCacheKey, __seimVal);`,
+              `  return __seimVal;`,
+              `})()`,
+            ].join('\n');
+          }
+        );
         break;
-      case 'inefficient-loop':
-        modified = `// [SEIM] Prefer for...of or .map/.filter for clarity and vectorization\n` + sourceCode;
+      }
+      case 'inefficient-loop': {
+        // Replace: for(let i = 0; i < arr.length; i++) → for (const item of arr)
+        modified = sourceCode.replace(
+          /for\s*\(\s*let\s+(\w+)\s*=\s*0;\s*\1\s*<\s*(\w+)\.length;\s*\1\+\+\s*\)/,
+          'for (const item of $2)'
+        );
+        // Also replace arr[i] references inside the loop body with `item`
+        modified = modified.replace(
+          /(\w+)\[item\]/g,
+          'item'
+        );
         break;
-      case 'redundant-serialization':
-        modified = `// [SEIM] Avoid JSON.parse(JSON.stringify(...)); use structuredClone or shallow copy\n` + sourceCode;
+      }
+      case 'redundant-serialization': {
+        // Replace JSON.parse(JSON.stringify(x)) with structuredClone(x)
+        modified = sourceCode.replace(
+          /JSON\.parse\(JSON\.stringify\(([^)]+)\)\)/g,
+          'structuredClone($1)'
+        );
         break;
-      case 'blocking-op':
-        modified = `// [SEIM] Replace blocking fs/child_process calls with async promise APIs\n` + sourceCode;
+      }
+      case 'blocking-op': {
+        // Replace blocking fs/child_process calls with async equivalents
+        modified = sourceCode.replace(
+          /readFileSync\(/g,
+          `await require('fs').promises.readFile(`
+        );
+        modified = modified.replace(
+          /writeFileSync\(/g,
+          `await require('fs').promises.writeFile(`
+        );
+        modified = modified.replace(
+          /execSync\(/g,
+          `await require('child_process').exec(`
+        );
         break;
+      }
       case 'nested-ternary':
+        // Too complex for reliable template rewrite — leave a comment
         modified = `// [SEIM] Replace nested ternary with early returns or object lookup for better readability\n` + sourceCode;
         break;
+      case 'unindexed-find': {
+        // Suggest using a Map for O(1) lookup instead of .find()
+        modified = sourceCode.replace(
+          /(\w+)\.find\s*\(\s*(\w+)\s*=>\s*\2\.(\w+)\s*===?\s*([^)]+)\)/,
+          `/* [SEIM] Use a Map for O(1) lookup: const __map = new Map($1.map(o => [o.$3, o])); __map.get($4) */\n$1.find($2 => $2.$3 === $4)`
+        );
+        break;
+      }
+      case 'response-streaming': {
+        // Suggest streaming large arrays instead of buffering in res.json()
+        modified = `// [SEIM] Consider streaming large arrays instead of buffering:\n` +
+          `// res.setHeader('Content-Type', 'application/json'); res.write('[');\n` +
+          `// for (const item of data) { res.write(JSON.stringify(item) + ','); } res.end(']');\n` +
+          sourceCode;
+        break;
+      }
       default:
         return undefined;
     }

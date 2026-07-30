@@ -1,9 +1,12 @@
 {
   "name": "seim",
-  "version": "0.1.0",
-  "description": "Self-Evolving Infrastructure Middleware — a self-improving runtime for Express applications",
+  "version": "0.3.0",
+  "description": "Self-Evolving Infrastructure Middleware — a self-evolving, framework-agnostic runtime with multi-generation optimization, cross-route intelligence, and explainable AI",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "seim": "dist/cli/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
@@ -17,13 +20,19 @@
   },
   "keywords": [
     "express",
+    "fastify",
     "middleware",
     "performance",
     "optimization",
     "ai",
     "observability",
     "self-healing",
-    "nodejs"
+    "self-evolving",
+    "evolution",
+    "genetic-algorithm",
+    "nodejs",
+    "cli",
+    "framework-agnostic"
   ],
   "author": "SEIM Labs",
   "license": "MIT",

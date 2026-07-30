@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction, RequestHandler } from 'express';
+import { LogLevel } from './logger';
 
 export type SeimMode = 'restrict' | 'bypass';
 
@@ -21,10 +22,19 @@ export interface OptimizationCandidate {
 
 export interface SeimConfig {
   mode: SeimMode;
+  environment?: 'development' | 'production';
+  framework?: 'express' | 'fastify' | 'http' | 'generic';
   studioPath: string;
   storagePath?: string;
   businessRules: BusinessRule[];
   securityRules: SecurityRule[];
+  production?: {
+    ciCd?: {
+      enabled?: boolean;
+      outputDir?: string;
+    };
+    requireIsolatedVm?: boolean;
+  };
   ai: {
     generatorModel: string;
     reviewerModel: string;
@@ -45,6 +55,7 @@ export interface SeimConfig {
     shadowCooldownMs: number;
     shadowAllowedMethods: string[];
     shadowSampleSize: number;
+    sandboxTimeoutMs?: number;
   };
   storage: {
     type: 'memory' | 'sqlite' | 'redis';
@@ -62,6 +73,22 @@ export interface SeimConfig {
     persistencePath?: string;
     sampleSize: number;
   };
+  logging?: {
+    level?: LogLevel;
+    json?: boolean;
+  };
+  worker?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    batchSize?: number;
+  };
+  autoMiddleware?: {
+    etag?: boolean;
+    compression?: boolean;
+    caching?: boolean;
+    rateLimit?: boolean;
+  };
+  evolution?: Partial<EvolutionConfig>;
 }
 
 export interface RouteMetrics {
@@ -115,6 +142,7 @@ export interface ValidationReport {
   layer5IntegrationTests: { pass: boolean; reason?: string };
   layer6Security: { pass: boolean; reason?: string };
   layer7AICritic: { pass: boolean; reason?: string };
+  layer8PerformanceGate: { pass: boolean; reason?: string };
   overall: boolean;
 }
 
@@ -135,12 +163,14 @@ export interface ExperimentReport {
 
 export interface SeimStatus {
   mode: SeimMode;
+  framework: string;
   uptime: number;
   totalOptimizationsGenerated: number;
   totalOptimizationsPromoted: number;
   totalRollbacks: number;
   activeShadowTests: number;
   activeVersions: { routeKey: string; active: 'original' | 'optimized' }[];
+  workerQueueSize: number;
   lastOptimizationAt?: number;
   healthy: boolean;
 }
@@ -153,9 +183,12 @@ export interface MetricsStore {
 }
 
 export interface SeimInstance {
-  listener: () => RequestHandler;
-  dashboard: RequestHandler;
+  listener: () => any;
+  plugin?: () => any;
+  dashboard: any;
   status(): SeimStatus;
+  shutdown(): Promise<void>;
+  on(event: string, listener: (...args: any[]) => void): void;
   config: Readonly<SeimConfig>;
   metrics: MetricsStore;
   endpointTracker?: any;
@@ -174,4 +207,71 @@ export interface OptimizationMemory {
   failureCount: number;
   averageImprovement: number;
   lastUsed: number;
+  bestImprovement?: number;
+  bestSolutionCode?: string;
+  bestOriginalCode?: string;
+  routeKeys?: string[];
+}
+
+export interface EvolutionConfig {
+  enabled: boolean;
+  populationSize: number;
+  maxGenerations: number;
+  fitnessWeights: {
+    latency: number;
+    errorRate: number;
+    memory: number;
+    stability: number;
+  };
+  tournamentRounds: number;
+  elitePreservation: boolean;
+  driftDetection: boolean;
+  driftThresholdPercent: number;
+  driftCheckIntervalMs: number;
+  patternExtraction: boolean;
+  crossRouteIntelligence: boolean;
+}
+
+export interface FitnessScore {
+  overall: number;
+  latencyScore: number;
+  errorRateScore: number;
+  memoryScore: number;
+  stabilityScore: number;
+  generation: number;
+  lineageId: string;
+}
+
+export interface EvolutionCandidate {
+  id: string;
+  routeKey: string;
+  generation: number;
+  parentId?: string;
+  strategy: 'template' | 'ai-standard' | 'ai-creative' | 'learned-pattern' | 'crossover';
+  code: string;
+  originalCode: string;
+  pattern: string;
+  fitness?: FitnessScore;
+  status: 'pending' | 'testing' | 'eliminated' | 'winner' | 'promoted';
+  createdAt: number;
+}
+
+export interface OptimizationExplanation {
+  routeKey: string;
+  candidateId: string;
+  pattern: string;
+  strategy: string;
+  whatChanged: string;
+  whyChosen: string;
+  measuredImpact: {
+    latencyReduction: number;
+    latencyReductionPercent: number;
+    errorRateChange: number;
+    memoryChange: number;
+  };
+  fitnessScore: number;
+  generation: number;
+  lineage: string[];
+  relatedOptimizations: string[];
+  timestamp: number;
 }
