@@ -88,6 +88,7 @@ export interface SeimConfig {
     caching?: boolean;
     rateLimit?: boolean;
   };
+  evolution?: Partial<EvolutionConfig>;
 }
 
 export interface RouteMetrics {
@@ -206,4 +207,71 @@ export interface OptimizationMemory {
   failureCount: number;
   averageImprovement: number;
   lastUsed: number;
+  bestImprovement?: number;
+  bestSolutionCode?: string;
+  bestOriginalCode?: string;
+  routeKeys?: string[];
+}
+
+export interface EvolutionConfig {
+  enabled: boolean;
+  populationSize: number;
+  maxGenerations: number;
+  fitnessWeights: {
+    latency: number;
+    errorRate: number;
+    memory: number;
+    stability: number;
+  };
+  tournamentRounds: number;
+  elitePreservation: boolean;
+  driftDetection: boolean;
+  driftThresholdPercent: number;
+  driftCheckIntervalMs: number;
+  patternExtraction: boolean;
+  crossRouteIntelligence: boolean;
+}
+
+export interface FitnessScore {
+  overall: number;
+  latencyScore: number;
+  errorRateScore: number;
+  memoryScore: number;
+  stabilityScore: number;
+  generation: number;
+  lineageId: string;
+}
+
+export interface EvolutionCandidate {
+  id: string;
+  routeKey: string;
+  generation: number;
+  parentId?: string;
+  strategy: 'template' | 'ai-standard' | 'ai-creative' | 'learned-pattern' | 'crossover';
+  code: string;
+  originalCode: string;
+  pattern: string;
+  fitness?: FitnessScore;
+  status: 'pending' | 'testing' | 'eliminated' | 'winner' | 'promoted';
+  createdAt: number;
+}
+
+export interface OptimizationExplanation {
+  routeKey: string;
+  candidateId: string;
+  pattern: string;
+  strategy: string;
+  whatChanged: string;
+  whyChosen: string;
+  measuredImpact: {
+    latencyReduction: number;
+    latencyReductionPercent: number;
+    errorRateChange: number;
+    memoryChange: number;
+  };
+  fitnessScore: number;
+  generation: number;
+  lineage: string[];
+  relatedOptimizations: string[];
+  timestamp: number;
 }

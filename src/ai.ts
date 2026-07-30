@@ -1,7 +1,8 @@
 import * as http from 'http';
 import * as https from 'https';
 import { URL } from 'url';
-import { SeimConfig } from './types';
+import { SeimConfig, OptimizationMemory } from './types';
+import { LearningContext } from './learning';
 
 export class LLMClient {
   private apiKey: string | undefined;
@@ -22,16 +23,29 @@ export class LLMClient {
     this.responsePath = config.ai.responsePath || this.defaultResponsePath();
   }
 
-  public async analyzeAndOptimize(sourceCode: string, currentMetrics?: { averageLatency: number; p95: number; p99: number; errorRate: number; requestCount: number }): Promise<{ canOptimize: boolean; reason: string; optimizedCode?: string; pattern?: string }> {
+  public async analyzeAndOptimize(sourceCode: string, currentMetrics?: { averageLatency: number; p95: number; p99: number; errorRate: number; requestCount: number }, learningContext?: LearningContext): Promise<{ canOptimize: boolean; reason: string; optimizedCode?: string; pattern?: string }> {
     if (!this.apiKey) return { canOptimize: false, reason: 'AI disabled (no API key)' };
     
     const metricsContext = currentMetrics 
       ? `\nCurrent performance metrics:\n- Request count: ${currentMetrics.requestCount}\n- Average latency: ${currentMetrics.averageLatency}ms\n- P95 latency: ${currentMetrics.p95}ms\n- P99 latency: ${currentMetrics.p99}ms\n- Error rate: ${(currentMetrics.errorRate * 100).toFixed(2)}%`
       : '';
 
-    const prompt = this.buildHolisticAnalysisPrompt(sourceCode, metricsContext);
+    const historyContext = learningContext ? this.buildLearningContextString(learningContext) : '';
+
+    const prompt = this.buildHolisticAnalysisPrompt(sourceCode, metricsContext + historyContext);
     const content = await this.chat(this.systemPrompt, prompt);
     return this.parseHolisticAnalysis(content);
+  }
+
+  /**
+   * Generate an optimization with a specific strategy variant.
+   * Used by the evolution engine to produce diverse candidates.
+   */
+  public async optimizeWithStrategy(originalSource: string, pattern: string, strategy: 'standard' | 'creative' | 'conservative', learningContext?: LearningContext): Promise<string | undefined> {
+    if (!this.apiKey) return undefined;
+    const prompt = this.buildStrategyPrompt(originalSource, pattern, strategy, learningContext);
+    const content = await this.chat(this.systemPrompt, prompt);
+    return this.extractCode(content);
   }
 
   public async optimize(originalSource: string, pattern: string): Promise<string | undefined> {
@@ -39,6 +53,15 @@ export class LLMClient {
     const prompt = this.buildOptimizePrompt(originalSource, pattern);
     const content = await this.chat(this.systemPrompt, prompt);
     return this.extractCode(content);
+  }
+
+  /**
+   * Generate a human-readable explanation for an optimization.
+   */
+  public async explain(original: string, optimized: string, pattern: string, improvement: number): Promise<string> {
+    if (!this.apiKey) return `Optimized for pattern "${pattern}" with ${improvement.toFixed(0)}ms latency reduction.`;
+    const prompt = `Explain this optimization in 2-3 sentences for a developer. What was changed and why it's faster.\n\nPattern: ${pattern}\nLatency improvement: ${improvement.toFixed(0)}ms\n\nOriginal:\n${original}\n\nOptimized:\n${optimized}`;
+    return await this.chat(this.systemPrompt, prompt);
   }
 
   public async review(original: string, optimized: string): Promise<{ pass: boolean; reason?: string }> {
@@ -192,6 +215,41 @@ export class LLMClient {
       }
       return current[part];
     }, obj);
+  }
+
+  private buildLearningContextString(ctx: LearningContext): string {
+    if (ctx.relatedSolutions.length === 0) return '';
+    let s = `\n\nHistorical optimization data for this pattern type:`;
+    s += `\n- Historical success rate: ${(ctx.historicalSuccessRate * 100).toFixed(0)}%`;
+    for (const sol of ctx.relatedSolutions.slice(0, 3)) {
+      const total = sol.successCount + sol.failureCount;
+      const rate = total === 0 ? 0 : (sol.successCount / total * 100);
+      s += `\n- Pattern "${sol.problem}": ${rate.toFixed(0)}% success rate, avg improvement ${sol.averageImprovement.toFixed(0)}ms`;
+      if (sol.bestSolutionCode) {
+        s += `\n  Best solution (${sol.bestImprovement?.toFixed(0)}ms improvement):\n  ${sol.bestSolutionCode.slice(0, 200)}...`;
+      }
+    }
+    s += `\n\nUse these past successes to inform your optimization. Prefer approaches that have historically worked.`;
+    return s;
+  }
+
+  private buildStrategyPrompt(source: string, pattern: string, strategy: 'standard' | 'creative' | 'conservative', learningContext?: LearningContext): string {
+    const historyStr = learningContext ? this.buildLearningContextString(learningContext) : '';
+    const strategyInstructions: Record<string, string> = {
+      standard: 'Apply the most straightforward optimization for this pattern. Focus on correctness first, then performance.',
+      creative: 'Take a creative, unconventional approach to optimization. Consider algorithmic improvements, data structure changes, caching strategies, or parallelization that go beyond the obvious fix. Try something different from the standard approach.',
+      conservative: 'Apply the safest minimal optimization. Make the smallest change that yields improvement. Prioritize zero risk of behavior change.',
+    };
+
+    return `${strategyInstructions[strategy]}
+
+Optimize the following Express route handler for the detected pattern: ${pattern}.
+${historyStr}
+
+Keep the function signature as an async Express handler (req, res, next). Do not change authentication, authorization, payment logic, business rules, or the response schema. Do not introduce secrets or network calls. Return ONLY the function body inside a JavaScript code block. Do not include explanation.
+
+Original handler:
+${source}`;
   }
 
   private buildOptimizePrompt(source: string, pattern: string): string {

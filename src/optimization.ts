@@ -1,6 +1,7 @@
 import { OptimizationCandidate, SeimConfig, RouteMetrics } from './types';
 import { LLMClient } from './ai';
 import { EndpointTracker } from './endpointTracker';
+import { LearningMemoryStore, LearningContext } from './learning';
 
 export class OptimizationEngine {
   constructor(private config: SeimConfig, private llm: LLMClient) {}
@@ -14,7 +15,8 @@ export class OptimizationEngine {
     routeKey: string, 
     sourceCode: string, 
     routeMetrics: RouteMetrics | undefined,
-    endpointTracker: EndpointTracker
+    endpointTracker: EndpointTracker,
+    learningStore?: LearningMemoryStore,
   ): Promise<OptimizationCandidate[]> {
     const candidates: OptimizationCandidate[] = [];
     
@@ -27,9 +29,14 @@ export class OptimizationEngine {
       requestCount: routeMetrics.requestCount,
     } : undefined;
 
+    // Build learning context if store is available
+    const learningContext = learningStore
+      ? learningStore.buildContext('ai-detected', routeKey, this.config.framework ?? 'express', sourceCode)
+      : undefined;
+
     // Use AI-driven holistic analysis instead of pattern matching
     if (this.config.ai.enabled) {
-      const analysis = await this.llm.analyzeAndOptimize(sourceCode, currentMetrics);
+      const analysis = await this.llm.analyzeAndOptimize(sourceCode, currentMetrics, learningContext);
       
       if (!analysis.canOptimize) {
         // AI determined no optimization needed
@@ -39,14 +46,20 @@ export class OptimizationEngine {
 
       // AI found optimization opportunity
       if (analysis.optimizedCode) {
+        // Calibrate confidence based on learning history
+        let confidence = 0.92;
+        if (learningContext) {
+          confidence = learningContext.suggestedConfidence;
+        }
+
         const candidate: OptimizationCandidate = {
           id: `${routeKey}::ai-generated::${Date.now()}`,
           routeKey,
           pattern: analysis.pattern || 'ai-detected',
-          severity: 'high', // AI-detected issues are treated as high priority
+          severity: 'high',
           originalCode: sourceCode,
           optimizedCode: analysis.optimizedCode,
-          confidence: 0.92,
+          confidence,
           status: 'pending',
           createdAt: Date.now(),
           updatedAt: Date.now(),

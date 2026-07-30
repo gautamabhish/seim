@@ -1,7 +1,7 @@
 {
   "name": "seim",
-  "version": "0.2.0",
-  "description": "Self-Evolving Infrastructure Middleware — a self-improving, framework-agnostic runtime for Node.js applications",
+  "version": "0.3.0",
+  "description": "Self-Evolving Infrastructure Middleware — a self-evolving, framework-agnostic runtime with multi-generation optimization, cross-route intelligence, and explainable AI",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -27,6 +27,9 @@
     "ai",
     "observability",
     "self-healing",
+    "self-evolving",
+    "evolution",
+    "genetic-algorithm",
     "nodejs",
     "cli",
     "framework-agnostic"

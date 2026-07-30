@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { OptimizationCandidate, ExperimentReport } from './types';
+import { OptimizationCandidate, ExperimentReport, OptimizationExplanation } from './types';
 
 export interface SeimEvents {
   'optimization:detected': { routeKey: string; pattern: string; severity: string; candidateId: string };
@@ -7,6 +7,7 @@ export interface SeimEvents {
   'optimization:promoted': { routeKey: string; candidateId: string; latencyImprovement: number };
   'optimization:rejected': { routeKey: string; candidateId: string; reason: string };
   'optimization:rolledback': { routeKey: string; reason: string };
+  'optimization:explained': { routeKey: string; explanation: OptimizationExplanation };
   'shadow:started': { routeKey: string; candidateId: string };
   'shadow:completed': { routeKey: string; v1Latency: number; v2Latency: number; improvement: number };
   'health:degraded': { routeKey: string; healthScore: number; reason: string };
@@ -18,6 +19,12 @@ export interface SeimEvents {
   'worker:cycle': { routesAnalyzed: number; candidatesFound: number; duration: number };
   'lifecycle:started': { mode: string; framework: string };
   'lifecycle:shutdown': { reason: string };
+  'evolution:generation-started': { routeKey: string; generation: number; maxGenerations: number };
+  'evolution:candidate-eliminated': { routeKey: string; candidateId: string; strategy: string; fitness: number; generation: number };
+  'evolution:winner-selected': { routeKey: string; candidateId: string; strategy: string; fitness: number; generation: number };
+  'evolution:pattern-learned': { name: string; description: string; extractedFrom: string; improvement: number };
+  'evolution:propagated': { sourceRoute: string; targetRoutes: string[]; pattern: string; sharedFunctionCount: number };
+  'evolution:drift-detected': { routeKey: string; currentP95: number; promotedP95: number; degradationPercent: number };
 }
 
 export type SeimEventName = keyof SeimEvents;

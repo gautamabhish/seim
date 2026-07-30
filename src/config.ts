@@ -1,5 +1,24 @@
-import { SeimConfig, SeimMode } from './types';
+import { SeimConfig, SeimMode, EvolutionConfig } from './types';
 import { loadConfigFromFile } from './configLoader';
+
+export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {
+  enabled: true,
+  populationSize: 3,
+  maxGenerations: 3,
+  fitnessWeights: {
+    latency: 0.4,
+    errorRate: 0.3,
+    memory: 0.1,
+    stability: 0.2,
+  },
+  tournamentRounds: 3,
+  elitePreservation: true,
+  driftDetection: true,
+  driftThresholdPercent: 20,
+  driftCheckIntervalMs: 300_000,
+  patternExtraction: true,
+  crossRouteIntelligence: true,
+};
 
 export const DEFAULT_STUDIO_PATH = '/asdfghjklkjhgfdsasdfghj';
 export const DEFAULT_STORAGE_PATH = './.seim-storage';
@@ -65,6 +84,7 @@ export function getDefaultConfig(): SeimConfig {
       caching: true,
       rateLimit: false,
     },
+    evolution: { ...DEFAULT_EVOLUTION_CONFIG },
   };
 }
 
@@ -88,6 +108,14 @@ export function mergeConfig(user: Partial<SeimConfig> = {}): SeimConfig {
     logging: { ...defaults.logging, ...(effective.logging ?? {}) },
     worker: { ...defaults.worker, ...(effective.worker ?? {}) },
     autoMiddleware: { ...defaults.autoMiddleware, ...(effective.autoMiddleware ?? {}) },
+    evolution: {
+      ...DEFAULT_EVOLUTION_CONFIG,
+      ...(effective.evolution ?? {}),
+      fitnessWeights: {
+        ...DEFAULT_EVOLUTION_CONFIG.fitnessWeights,
+        ...((effective.evolution as any)?.fitnessWeights ?? {}),
+      },
+    },
     environment: effective.environment ?? defaults.environment,
     framework: effective.framework ?? defaults.framework,
     production: { ...defaults.production, ...(effective.production ?? {}) },
