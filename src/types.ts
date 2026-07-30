@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction, RequestHandler } from 'express';
+import { LogLevel } from './logger';
 
 export type SeimMode = 'restrict' | 'bypass';
 
@@ -21,10 +22,19 @@ export interface OptimizationCandidate {
 
 export interface SeimConfig {
   mode: SeimMode;
+  environment?: 'development' | 'production';
+  framework?: 'express' | 'fastify' | 'http' | 'generic';
   studioPath: string;
   storagePath?: string;
   businessRules: BusinessRule[];
   securityRules: SecurityRule[];
+  production?: {
+    ciCd?: {
+      enabled?: boolean;
+      outputDir?: string;
+    };
+    requireIsolatedVm?: boolean;
+  };
   ai: {
     generatorModel: string;
     reviewerModel: string;
@@ -45,6 +55,7 @@ export interface SeimConfig {
     shadowCooldownMs: number;
     shadowAllowedMethods: string[];
     shadowSampleSize: number;
+    sandboxTimeoutMs?: number;
   };
   storage: {
     type: 'memory' | 'sqlite' | 'redis';
@@ -61,6 +72,21 @@ export interface SeimConfig {
     enabled: boolean;
     persistencePath?: string;
     sampleSize: number;
+  };
+  logging?: {
+    level?: LogLevel;
+    json?: boolean;
+  };
+  worker?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    batchSize?: number;
+  };
+  autoMiddleware?: {
+    etag?: boolean;
+    compression?: boolean;
+    caching?: boolean;
+    rateLimit?: boolean;
   };
 }
 
@@ -115,6 +141,7 @@ export interface ValidationReport {
   layer5IntegrationTests: { pass: boolean; reason?: string };
   layer6Security: { pass: boolean; reason?: string };
   layer7AICritic: { pass: boolean; reason?: string };
+  layer8PerformanceGate: { pass: boolean; reason?: string };
   overall: boolean;
 }
 
@@ -135,12 +162,14 @@ export interface ExperimentReport {
 
 export interface SeimStatus {
   mode: SeimMode;
+  framework: string;
   uptime: number;
   totalOptimizationsGenerated: number;
   totalOptimizationsPromoted: number;
   totalRollbacks: number;
   activeShadowTests: number;
   activeVersions: { routeKey: string; active: 'original' | 'optimized' }[];
+  workerQueueSize: number;
   lastOptimizationAt?: number;
   healthy: boolean;
 }
@@ -153,9 +182,12 @@ export interface MetricsStore {
 }
 
 export interface SeimInstance {
-  listener: () => RequestHandler;
-  dashboard: RequestHandler;
+  listener: () => any;
+  plugin?: () => any;
+  dashboard: any;
   status(): SeimStatus;
+  shutdown(): Promise<void>;
+  on(event: string, listener: (...args: any[]) => void): void;
   config: Readonly<SeimConfig>;
   metrics: MetricsStore;
   endpointTracker?: any;

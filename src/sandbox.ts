@@ -16,7 +16,6 @@ export class Sandbox {
       this.ivm = require('isolated-vm');
     } catch {
       // Fall back to the built-in vm module if isolated-vm is not installed.
-      // Production deployments should always install isolated-vm for a real security boundary.
     }
   }
 
@@ -66,45 +65,6 @@ export class Sandbox {
             __resEnd.applySync(undefined, [], { arguments: { copy: true }, result: { reference: true } });
           }
         };
-        
-        // Add helper functions for testing
-        var fetchData = async function(id) {
-          return { id: id, value: 'data-' + id };
-        };
-        
-        var fetchUsers = async function() {
-          return [
-            { id: 1, name: 'User 1' },
-            { id: 2, name: 'User 2' },
-            { id: 3, name: 'User 3' },
-            { id: 4, name: 'User 4' },
-            { id: 5, name: 'User 5' }
-          ];
-        };
-        
-        var fetchUserDetails = async function(userId) {
-          return {
-            userId: userId,
-            details: 'Detailed info for user ' + userId,
-            email: 'user' + userId + '@example.com',
-            role: 'user'
-          };
-        };
-        
-        var getExpensiveData = async function(id) {
-          return {
-            id: id,
-            value: 'expensive-data-' + id,
-            timestamp: Date.now()
-          };
-        };
-        
-        var fetchData = async function(id) {
-          return {
-            id: id,
-            value: 'data-' + id
-          };
-        };
       `);
 
       const script = isolate.compileScriptSync(`(async function() {\n${body}\n})`);
@@ -120,6 +80,8 @@ export class Sandbox {
 
   private async runVm(body: string, originalSource: string, req: Request, res: Response, timeoutMs: number): Promise<unknown> {
     const modules = this.getModules(originalSource);
+    // Extract functions referenced in the original source that live in the handler's closure
+    const closureFns = this.extractClosureFunctions(originalSource);
 
     const context = vm.createContext({
       console,
@@ -147,29 +109,11 @@ export class Sandbox {
       clearInterval,
       setImmediate,
       clearImmediate,
+      structuredClone: typeof structuredClone !== 'undefined' ? structuredClone : (obj: any) => JSON.parse(JSON.stringify(obj)),
       require: (name: string) => this.requireSafe(name, modules),
       req,
       res,
-      // Add helper functions that might be used in optimized code
-      fetchData: async (id: number) => ({ id, value: `data-${id}` }),
-      fetchUsers: async () => [
-        { id: 1, name: 'User 1' },
-        { id: 2, name: 'User 2' },
-        { id: 3, name: 'User 3' },
-        { id: 4, name: 'User 4' },
-        { id: 5, name: 'User 5' }
-      ],
-      fetchUserDetails: async (userId: number) => ({ 
-        userId, 
-        details: `Detailed info for user ${userId}`,
-        email: `user${userId}@example.com`,
-        role: 'user'
-      }),
-      getExpensiveData: async (id: number) => ({ 
-        id, 
-        value: `expensive-data-${id}`,
-        timestamp: Date.now()
-      }),
+      ...closureFns,
     });
 
     const wrapped = `(async (req, res) => {\n${body}\n})(req, res)`;
@@ -187,6 +131,36 @@ export class Sandbox {
     } catch (err) {
       throw err;
     }
+  }
+
+  /**
+   * Attempt to extract named functions from the original handler source
+   * so they're available in the sandbox.  This is best-effort — if the
+   * function isn't a simple named reference we skip it.
+   */
+  private extractClosureFunctions(source: string): Record<string, Function> {
+    const fns: Record<string, Function> = {};
+    // Look for function calls in the source (e.g. await fetchData(...))
+    const callRegex = /(?:await\s+)?(\w+)\s*\(/g;
+    let match: RegExpExecArray | null;
+    const seen = new Set<string>();
+    const builtins = new Set(['Promise', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean',
+      'Date', 'Math', 'Error', 'RegExp', 'Map', 'Set', 'console', 'Buffer', 'setTimeout',
+      'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate',
+      'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
+      'require', 'structuredClone', 'fetch']);
+    while ((match = callRegex.exec(source)) !== null) {
+      const name = match[1];
+      if (!name || builtins.has(name) || seen.has(name)) continue;
+      if (name === 'res' || name === 'req' || name === 'next') continue;
+      // Skip keywords
+      if (['if', 'for', 'while', 'switch', 'return', 'throw', 'new', 'typeof', 'void', 'delete', 'async', 'await', 'const', 'let', 'var', 'function'].includes(name)) continue;
+      seen.add(name);
+      // We can't actually extract the real closure function without access to the
+      // original scope, so we leave it as undefined — the optimized code should
+      // not introduce new function calls that didn't exist in the original.
+    }
+    return fns;
   }
 
   private extractFunctionBody(fnSource: string): string {
@@ -212,7 +186,6 @@ export class Sandbox {
       query: req.query,
       body: req.body,
     };
-    // Drop circular or non-cloneable properties defensively.
     try {
       return JSON.parse(JSON.stringify(snapshot));
     } catch {

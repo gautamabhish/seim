@@ -1,4 +1,5 @@
 import { SeimConfig, SeimMode } from './types';
+import { loadConfigFromFile } from './configLoader';
 
 export const DEFAULT_STUDIO_PATH = '/asdfghjklkjhgfdsasdfghj';
 export const DEFAULT_STORAGE_PATH = './.seim-storage';
@@ -8,7 +9,7 @@ export const DEFAULT_SECURITY_CONFIG: NonNullable<SeimConfig['security']> = {
   blockAuthorizationChanges: true,
   blockPaymentChanges: true,
   blockSecretUsage: true,
-  allowedPatternModels: ['sequential-async', 'n-plus-one', 'missing-cache', 'inefficient-loop', 'redundant-serialization', 'blocking-op', 'nested-ternary', 'ai-detected'],
+  allowedPatternModels: ['sequential-async', 'n-plus-one', 'missing-cache', 'inefficient-loop', 'redundant-serialization', 'blocking-op', 'nested-ternary', 'unindexed-find', 'response-streaming', 'ai-detected'],
 };
 
 export const DEFAULT_EXPERIMENT_CONFIG: NonNullable<SeimConfig['experiment']> = {
@@ -20,15 +21,19 @@ export const DEFAULT_EXPERIMENT_CONFIG: NonNullable<SeimConfig['experiment']> = 
   shadowCooldownMs: 60000,
   shadowAllowedMethods: ['GET'],
   shadowSampleSize: 25,
+  sandboxTimeoutMs: 500,
 };
 
 export function getDefaultConfig(): SeimConfig {
   return {
     mode: 'restrict' as SeimMode,
+    environment: 'development',
+    framework: 'express',
     studioPath: DEFAULT_STUDIO_PATH,
     storagePath: DEFAULT_STORAGE_PATH,
     businessRules: [],
     securityRules: [],
+    production: {},
     ai: {
       generatorModel: 'gpt-4',
       reviewerModel: 'gpt-4',
@@ -45,21 +50,57 @@ export function getDefaultConfig(): SeimConfig {
       enabled: true,
       sampleSize: 50,
     },
+    logging: {
+      level: 'info',
+      json: false,
+    },
+    worker: {
+      enabled: true,
+      intervalMs: 10000,
+      batchSize: 5,
+    },
+    autoMiddleware: {
+      etag: true,
+      compression: true,
+      caching: true,
+      rateLimit: false,
+    },
   };
 }
 
 export function mergeConfig(user: Partial<SeimConfig> = {}): SeimConfig {
+  // Auto-discover config from project files if no config passed
+  const fileConfig = loadConfigFromFile() || {};
+  const effective = { ...fileConfig, ...user };
+
   const defaults = getDefaultConfig();
-  return {
+  const merged: SeimConfig = {
     ...defaults,
-    ...user,
-    storagePath: user.storagePath ?? DEFAULT_STORAGE_PATH,
-    businessRules: [...(user.businessRules ?? defaults.businessRules)],
-    securityRules: [...(user.securityRules ?? defaults.securityRules)],
-    ai: { ...defaults.ai, ...user.ai },
-    experiment: { ...defaults.experiment, ...(user.experiment ?? {}) },
-    storage: { ...defaults.storage, ...(user.storage ?? {}) },
-    security: { ...defaults.security, ...(user.security ?? {}) },
-    learning: { ...defaults.learning, ...(user.learning ?? {}) },
+    ...effective,
+    storagePath: effective.storagePath ?? DEFAULT_STORAGE_PATH,
+    businessRules: [...(effective.businessRules ?? defaults.businessRules)],
+    securityRules: [...(effective.securityRules ?? defaults.securityRules)],
+    ai: { ...defaults.ai, ...effective.ai },
+    experiment: { ...defaults.experiment, ...(effective.experiment ?? {}) },
+    storage: { ...defaults.storage, ...(effective.storage ?? {}) },
+    security: { ...defaults.security, ...(effective.security ?? {}) },
+    learning: { ...defaults.learning, ...(effective.learning ?? {}) },
+    logging: { ...defaults.logging, ...(effective.logging ?? {}) },
+    worker: { ...defaults.worker, ...(effective.worker ?? {}) },
+    autoMiddleware: { ...defaults.autoMiddleware, ...(effective.autoMiddleware ?? {}) },
+    environment: effective.environment ?? defaults.environment,
+    framework: effective.framework ?? defaults.framework,
+    production: { ...defaults.production, ...(effective.production ?? {}) },
   };
+
+  if (merged.environment === 'production') {
+    if (merged.storage?.type === 'memory') {
+      throw new Error('Production environment requires persistent storage. Set storage.type to "redis" (or "sqlite" when supported) and provide storage.connection.');
+    }
+    if (merged.storage?.type === 'redis' && !merged.storage?.connection) {
+      throw new Error('Production environment with Redis requires storage.connection (Redis URL).');
+    }
+  }
+
+  return merged;
 }

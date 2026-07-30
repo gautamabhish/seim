@@ -1,16 +1,21 @@
 # SEIM — Self-Evolving Infrastructure Middleware
 
-SEIM is an Express.js middleware that observes your API traffic, detects performance anti-patterns, generates safe optimizations, validates them, runs them as shadow implementations, and promotes only the versions that are provably correct, secure, and faster.
+SEIM is a framework-agnostic, self-optimizing runtime for Node.js applications. It observes your API traffic, detects performance anti-patterns, generates safe optimizations, validates them through shadow testing, and promotes only the versions that are provably correct, secure, and faster. It ships with a CLI, structured observability, production-grade lifecycle management, and support for Express, Fastify, and generic HTTP servers.
 
 ## Features
 
-- **AI-Powered Optimization**: Analyzes code patterns and suggests improvements
+- **Framework Agnostic**: Works with Express, Fastify, or any Node.js HTTP server
+- **AI + Template Optimization**: Pattern-based rewrites plus optional LLM generation
+- **Background Worker**: Optimization analysis runs off the request path
 - **Shadow Testing**: Safe testing of optimizations before deployment
-- **Automatic Rollback**: Instant rollback if issues are detected
+- **Smart Validation**: Structural response comparison, unit test runner, and performance gate
+- **Automatic Rollback**: Instant rollback if latency or error rate regresses
+- **Structured Observability**: Typed event bus and configurable logger
+- **Exponential Backoff**: Failed routes back off automatically with health scoring
 - **Version Management**: Complete history of all endpoint versions with persistent storage
-- **Performance Tracking**: Metrics analysis for optimization decisions
+- **CLI Tool**: `seim init`, `status`, `analyze`, `benchmark`, `rollback`, `apply`
 - **Token Saving**: Smart caching to avoid unnecessary AI calls
-- **Holistic AI Analysis**: AI-driven code analysis without rigid pattern matching
+- **Auto-Middleware Detection**: Identifies missing ETag, compression, and caching opportunities
 
 ## Install
 
@@ -37,7 +42,7 @@ const seim = require('seim').default;
 const app = express();
 
 const s = seim({
-  mode: 'restrict', // safe observe-and-suggest mode
+  mode: 'bypass', // enable autonomous optimization
   businessRules: [
     (response) => response && response.total >= 0,
     (response) => !response.items || response.items.length <= 1000,
@@ -60,124 +65,84 @@ app.listen(3000, () => {
 });
 ```
 
-## Directory Structure
+### Fastify
 
-```
-seim/
-├── src/                    # Source code
-│   ├── ai.ts             # AI client for optimization
-│   ├── config.ts         # Configuration management
-│   ├── dynamicRouter.ts  # Dynamic routing for production
-│   ├── endpointTracker.ts # Endpoint optimization tracking
-│   ├── index.ts          # Main entry point
-│   ├── metrics.ts        # Metrics collection
-│   ├── metricsAnalyzer.ts # Performance analysis
-│   ├── middleware.ts     # Express middleware
-│   ├── optimization.ts   # Optimization engine
-│   ├── persistentVersionManager.ts # Persistent version storage
-│   ├── productionManager.ts # Production deployment manager
-│   ├── rollback.ts       # Rollback mechanism
-│   ├── sandbox.ts        # Code execution sandbox
-│   ├── shadow.ts         # Shadow testing engine
-│   ├── shadowLimiter.ts  # Shadow testing rate limiter
-│   ├── types.ts          # TypeScript types
-│   ├── validation.ts     # Validation engine
-│   └── versionManager.ts # Version management
-├── tests/                 # Comprehensive test suite
-│   ├── benchmark.test.ts # Performance benchmarks
-│   ├── endpointTracker.test.ts # Unit tests
-│   ├── feasibility.test.ts # Feasibility metrics
-│   ├── integration.test.ts # Integration tests
-│   ├── metricsAnalyzer.test.ts # Unit tests
-│   ├── stress.test.ts     # Stress tests
-│   ├── versionManager.test.ts # Unit tests
-│   └── jest.config.js    # Jest configuration
-├── examples/              # Example scripts
-│   ├── test-enhanced-system.js # Complete system test
-│   ├── test-production-deployment.js # Production deployment test
-│   ├── test-ai.js        # AI optimization test
-│   ├── test-loop-ai.js   # Loop optimization test
-│   ├── test-blocking-ai.js # Blocking operation test
-│   ├── test-cache-ai.js   # Cache optimization test
-│   ├── test-n-plus-one-ai.js # N+1 query optimization test
-│   ├── test-ternary-ai.js # Ternary operator test
-│   ├── test-serialization-ai.js # Serialization test
-│   ├── test-regex.js     # Regex optimization test
-│   ├── test-simple.js    # Simple test
-│   ├── test-working.js   # Working example
-│   ├── test-final.js     # Final test
-│   ├── test-api.js       # API test
-│   ├── test-api-debug.js # API debug test
-│   ├── test-direct.js    # Direct test
-│   ├── test-loop-pattern.js # Pattern-based loop test
-│   ├── test-cache-pattern.js # Pattern-based cache test
-│   ├── test-n-plus-one.js # N+1 pattern test
-│   ├── test-ternary-pattern.js # Pattern-based ternary test
-│   ├── test-sequential-working.js # Sequential working test
-│   ├── test-working-loop.js # Working loop test
-│   └── run-test.sh      # Test runner script
-├── docs/                  # Documentation
-│   ├── ARCHITECTURE.md   # System architecture
-│   ├── PRODUCTION_DEPLOYMENT.md # Production deployment guide
-│   ├── PRODUCTION_LIMITATIONS.md # Current limitations
-│   ├── VERSION_MANAGEMENT.md # Version management system
-│   └── TEST_REPORT.md    # Comprehensive test report
-├── dist/                  # Compiled JavaScript
-└── package.json          # Package configuration
+```js
+const fastify = require('fastify')({ logger: true });
+const seim = require('seim').default;
+
+const s = seim({ framework: 'fastify', mode: 'bypass' });
+fastify.register(s.plugin());
 ```
 
-## Testing
+## CLI
 
-SEIM includes a comprehensive test suite covering all aspects of the system:
+SEIM ships with a zero-dependency CLI:
 
 ```bash
-# Run all tests
-npm test
-
-# Run specific test suites
-npm run test:unit         # Unit tests only (35 tests)
-npm run test:stress       # Stress tests only (11 tests)
-npm run test:benchmark    # Benchmark tests only (9 tests)
-npm run test:feasibility  # Feasibility tests only (9 tests)
-npm run test:integration  # Integration tests only (9 tests)
+seim init                      # scaffold .seimrc.json
+seim status [url]              # show live status
+seim analyze ./routes/users.js # offline pattern analysis
+seim benchmark <url>           # simple HTTP benchmark
+seim rollback /api/users       # trigger rollback via API
+seim apply [dir]               # review CI/CD optimization output
 ```
 
-### Test Coverage
-
-- **Unit Tests**: 35 tests covering individual components
-- **Stress Tests**: 11 tests for load handling and memory efficiency
-- **Benchmark Tests**: 9 tests for performance metrics and overhead
-- **Feasibility Tests**: 9 tests for adoption feasibility metrics
-- **Integration Tests**: 9 tests for complete workflow scenarios
-
-### Test Results
-
-- **Total Tests**: 73
-- **Pass Rate**: 100%
-- **Performance**: Sub-millisecond operations for all components
-- **Scalability**: Linear scaling with load
-- **Memory Efficiency**: ~315 bytes per version
-
-See `docs/TEST_REPORT.md` for detailed test results and performance analysis.
-
 ## Configuration
+
+SEIM auto-discovers config from `.seimrc.json`, `seim.config.js`, or `package.json#seim`. You can also pass it programmatically.
+
+```json
+{
+  "mode": "bypass",
+  "framework": "express",
+  "logging": {
+    "level": "info",
+    "json": false
+  },
+  "experiment": {
+    "canaryPercent": 5,
+    "shadowCooldownMs": 60000,
+    "shadowSampleSize": 25,
+    "sandboxTimeoutMs": 500
+  },
+  "worker": {
+    "enabled": true,
+    "intervalMs": 10000
+  },
+  "ai": {
+    "enabled": false
+  },
+  "autoMiddleware": {
+    "etag": true,
+    "compression": true,
+    "caching": true
+  }
+}
+```
+
+### Full configuration interface
 
 ```ts
 interface SeimConfig {
   mode: 'restrict' | 'bypass';
+  environment?: 'development' | 'production';
+  framework?: 'express' | 'fastify' | 'http' | 'generic';
   studioPath: string;
-  storagePath?: string; // Path for persistent version storage
+  storagePath?: string;
   businessRules: ((response: any, request?: Request) => boolean | Promise<boolean>)[];
   securityRules?: ((oldCode: string, newCode: string) => { pass: boolean; reason?: string })[];
   ai?: {
     enabled: boolean;
     apiKey?: string;
     baseUrl?: string;
+    provider?: 'openai' | 'anthropic' | 'google' | 'grok' | 'custom';
     generatorModel?: string;
     reviewerModel?: string;
     verifierModel?: string;
+    headers?: Record<string, string>;
   };
-  experiment: {
+  experiment?: {
     confidenceThreshold: number;
     canaryPercent: number;
     rollbackLatencyMs: number;
@@ -185,13 +150,39 @@ interface SeimConfig {
     minSampleSize: number;
     shadowCooldownMs: number;
     shadowAllowedMethods: string[];
+    shadowSampleSize: number;
+    sandboxTimeoutMs?: number;
   };
-  security: {
+  storage?: {
+    type: 'memory' | 'sqlite' | 'redis';
+    connection?: string;
+  };
+  security?: {
     blockAuthenticationChanges: boolean;
     blockAuthorizationChanges: boolean;
     blockPaymentChanges: boolean;
     blockSecretUsage: boolean;
     allowedPatternModels: string[];
+  };
+  learning?: {
+    enabled: boolean;
+    sampleSize: number;
+    persistencePath?: string;
+  };
+  logging?: {
+    level: 'debug' | 'info' | 'warn' | 'error' | 'silent';
+    json?: boolean;
+  };
+  worker?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    batchSize?: number;
+  };
+  autoMiddleware?: {
+    etag?: boolean;
+    compression?: boolean;
+    caching?: boolean;
+    rateLimit?: boolean;
   };
 }
 ```
@@ -211,32 +202,139 @@ Use this in production first while you build confidence.
 
 - Observes traffic
 - Generates optimized candidates
-- Validates against all seven layers
+- Validates against all eight layers
 - Runs shadow tests on a small sample
 - Promotes winners, rolls back regressions
 
 ## How it works
 
 1. **Observe** — every request is timed and counted.
-2. **Analyze** — SEIM scans route handlers for patterns like sequential `await`s, N+1 queries, and missing caches.
-3. **Improve** — in `bypass` mode, an LLM (or a built-in template fallback) creates an optimized candidate.
-4. **Validate** — the candidate must pass schema, response equivalence, business rules, unit/integration tests, security, and an AI critic.
-5. **Experiment** — the optimized handler runs on a cloned request and a stub response; the real user still gets the original.
-6. **Promote** — if the new version is faster with no extra errors, SEIM swaps the real Express `route.stack` handle.
-7. **Rollback** — if error rate or latency regresses, the original is restored instantly on the next request.
+2. **Analyze** — SEIM scans route handlers for patterns like sequential `await`s, N+1 queries, missing caches, blocking operations, and more.
+3. **Queue** — candidate routes are enqueued to a background worker so request handling is never blocked.
+4. **Improve** — a template-based optimizer (or optional LLM) creates an optimized candidate.
+5. **Validate** — the candidate must pass schema, structural response equivalence, business rules, unit/integration tests, security, an AI critic, and a performance regression gate.
+6. **Experiment** — the optimized handler runs on a cloned request and a stub response; the real user still gets the original.
+7. **Promote** — if the new version is faster with no extra errors, SEIM swaps the real route handler.
+8. **Rollback** — if error rate or latency regresses, the original is restored instantly on the next request.
+9. **Learn** — health scoring and exponential backoff ensure failed attempts do not spam the system.
 
-## Version Management
+## Pattern Detection
 
-SEIM now includes comprehensive version management:
+SEIM detects and rewrites these anti-patterns without requiring an LLM:
 
-- **Persistent Storage**: File-based storage for all endpoint versions
-- **Semantic Versioning**: v1.0.0, v1.1.0, etc. for clear version tracking
-- **Complete History**: Every version and transition tracked
-- **Safe Rollback**: Can rollback to any previous version
-- **Performance Tracking**: Metrics per version for comparison
-- **Audit Trail**: Complete change history with reasons
+- `sequential-async` — sequential `await`s in a loop → `Promise.all`
+- `n-plus-one` — `forEach` with `await` → batched `Promise.all`
+- `missing-cache` — repeated DB/API calls → Map-based cache
+- `inefficient-loop` — C-style `for` → `for...of`
+- `redundant-serialization` — `JSON.parse(JSON.stringify(x))` → `structuredClone(x)`
+- `blocking-op` — `readFileSync` / `writeFileSync` / `execSync` → async equivalents
+- `nested-ternary` — deeply nested ternaries (flagged for review)
+- `unindexed-find` — linear `.find()` on large arrays → Map lookup
+- `response-streaming` — large mapped JSON responses → streaming suggestion
 
-See `docs/VERSION_MANAGEMENT.md` for detailed version management documentation.
+## Observability
+
+SEIM emits typed events through `SeimEventBus`:
+
+- `optimization:detected`
+- `optimization:validated`
+- `optimization:promoted`
+- `optimization:rejected`
+- `optimization:rolledback`
+- `shadow:started` / `shadow:completed`
+- `health:degraded` / `health:recovered`
+- `metrics:threshold`
+- `error:*`
+- `lifecycle:*`
+
+Listen programmatically:
+
+```js
+s.on('optimization:promoted', (payload) => {
+  console.log('Promoted', payload.routeKey, 'improvement', payload.latencyImprovement);
+});
+```
+
+## Lifecycle
+
+Always call `shutdown()` on process exit to release intervals and flush state:
+
+```js
+process.on('SIGTERM', async () => {
+  await s.shutdown();
+  process.exit(0);
+});
+```
+
+## Testing
+
+SEIM includes a comprehensive test suite:
+
+```bash
+# Run all tests
+npm test
+
+# Run specific test suites
+npm run test:unit         # Unit tests
+npm run test:stress       # Stress tests
+npm run test:benchmark    # Benchmark tests
+npm run test:feasibility  # Feasibility tests
+npm run test:integration  # Integration tests
+```
+
+### Test Coverage
+
+- **Unit Tests**: metrics analyzer, endpoint tracker, version manager
+- **Stress Tests**: load handling and memory efficiency
+- **Benchmark Tests**: performance metrics and overhead
+- **Feasibility Tests**: adoption feasibility metrics
+- **Integration Tests**: complete workflow scenarios
+
+### Test Results
+
+- **Total Tests**: 73
+- **Pass Rate**: 100%
+- **Performance**: Sub-millisecond operations for all components
+- **Scalability**: Linear scaling with load
+- **Memory Efficiency**: ~315 bytes per version
+
+## Directory Structure
+
+```
+seim/
+├── src/
+│   ├── adapters/           # Framework adapters (Express/Fastify/generic)
+│   ├── cli/                # CLI commands
+│   ├── ai.ts               # AI client
+│   ├── autoMiddleware.ts   # Auto-middleware detection
+│   ├── config.ts           # Configuration management
+│   ├── configLoader.ts     # Config file discovery
+│   ├── dynamicRouter.ts    # Dynamic routing for production
+│   ├── endpointTracker.ts  # Endpoint optimization tracking
+│   ├── events.ts           # Typed event bus
+│   ├── index.ts            # Main entry point
+│   ├── logger.ts           # Configurable logger
+│   ├── metrics.ts          # Sliding window metrics
+│   ├── metricsAnalyzer.ts  # Performance analysis
+│   ├── middleware.ts       # Framework-agnostic middleware
+│   ├── optimization.ts     # Optimization engine
+│   ├── persistentVersionManager.ts # Persistent version storage
+│   ├── productionManager.ts # Production deployment manager
+│   ├── rollback.ts         # Rollback mechanism
+│   ├── sandbox.ts          # Code execution sandbox
+│   ├── shadow.ts           # Shadow testing engine
+│   ├── shadowLimiter.ts    # Shadow testing rate limiter
+│   ├── storageFactory.ts   # Storage adapter factory
+│   ├── types.ts            # TypeScript types
+│   ├── validation.ts       # Validation engine
+│   ├── versionManager.ts   # In-memory version management
+│   └── worker.ts           # Background optimization worker
+├── tests/                  # Comprehensive test suite
+├── examples/               # Example scripts
+├── docs/                   # Documentation
+├── dist/                   # Compiled JavaScript
+└── package.json            # Package configuration
+```
 
 ## Production Deployment
 
@@ -247,58 +345,23 @@ SEIM includes production deployment features:
 - **Shadow Testing**: Safe testing before full deployment
 - **Auto-Rollback**: Automatic rollback on threshold violations
 - **Health Monitoring**: Real-time performance tracking
+- **Background Worker**: Optimization analysis decoupled from request handling
+- **Exponential Backoff**: Prevents repeated failed optimization attempts
 
-See `docs/PRODUCTION_DEPLOYMENT.md` for production deployment guide.
+For multi-instance deployments, configure persistent storage (`redis` with `storage.connection`).
 
 ## Current Limitations
 
-- **Single Instance Only**: No multi-instance coordination
-- **File-Based Storage**: Not suitable for multi-instance coordination
-- **No CI/CD Integration**: Runtime-only optimizations
-- **No Redis Coordination**: No distributed state management
-
-See `docs/PRODUCTION_LIMITATIONS.md` for detailed limitations.
-
-## Documentation
-
-- **Architecture**: See `docs/ARCHITECTURE.md` for system architecture
-- **Production Deployment**: See `docs/PRODUCTION_DEPLOYMENT.md` for production setup
-- **Version Management**: See `docs/VERSION_MANAGEMENT.md` for version control details
-- **Test Report**: See `docs/TEST_REPORT.md` for comprehensive test results
-- **Limitations**: See `docs/PRODUCTION_LIMITATIONS.md` for current limitations
-
-## Examples
-
-See the `examples/` directory for various usage scenarios:
-- `test-enhanced-system.js` - Complete system test with all features
-- `test-production-deployment.js` - Production deployment test
-- `test-ai.js` - AI optimization test
-- `test-loop-ai.js` - Loop optimization test
-- `test-blocking-ai.js` - Blocking operation test
-- `test-cache-ai.js` - Cache optimization test
-- `test-n-plus-one-ai.js` - N+1 query optimization test
-- `test-ternary-ai.js` - Ternary operator test
-- `test-serialization-ai.js` - Serialization test
-- `test-regex.js` - Regex optimization test
-- `test-simple.js` - Simple test
-- `test-working.js` - Working example
-- `test-final.js` - Final test
-- `test-api.js` - API test
-- `test-api-debug.js` - API debug test
-- `test-direct.js` - Direct test
-- `test-loop-pattern.js` - Pattern-based loop test
-- `test-cache-pattern.js` - Pattern-based cache test
-- `test-n-plus-one.js` - N+1 pattern test
-- `test-ternary-pattern.js` - Pattern-based ternary test
-- `test-sequential-working.js` - Sequential working test
-- `test-working-loop.js` - Working loop test
-- `run-test.sh` - Test runner script
+- **Single Instance Coordination**: Redis storage is available but lock-free; multi-instance promotion requires external coordination
+- **Fastify / Generic HTTP**: Metrics collection works; live handler swapping requires CI/CD or manual integration
+- **AI Provider**: Requires external API key; all optimizations work without AI using templates
 
 ## Scripts
 
 ```bash
 npm run build   # compile TypeScript to dist/
 npm test        # run Jest test suite
+npm run watch   # compile in watch mode
 npm pack        # preview the npm tarball
 ```
 

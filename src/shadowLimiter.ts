@@ -12,7 +12,7 @@ export class ShadowLimiter {
 
     const key = this.key(req, routeKey);
     const now = Date.now();
-    const cooldown = this.config.experiment.shadowCooldownMs || 60000;
+    const cooldown = this.config.experiment.shadowCooldownMs ?? 60000;
     
     // If cooldown is 0, always allow (for testing)
     if (cooldown === 0) return true;
@@ -27,10 +27,24 @@ export class ShadowLimiter {
   }
 
   private key(req: Request, routeKey: string): string {
+    // Priority: user ID > session ID > x-request-id > x-forwarded-for > IP
+    // This ensures proper keying behind load balancers where all traffic
+    // comes from the same internal IP.
     const userId = (req as any).user?.id || (req as any).userId;
-    const ip = req.ip || req.headers['x-forwarded-for'] || (req as any).socket?.remoteAddress || 'unknown';
-    const id = userId ? `u:${userId}` : `ip:${ip}`;
-    return `${routeKey}::${id}`;
+    if (userId) return `${routeKey}::u:${userId}`;
+
+    const sessionId = (req as any).session?.id || (req as any).sessionID;
+    if (sessionId) return `${routeKey}::s:${sessionId}`;
+
+    const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'];
+    if (requestId) return `${routeKey}::r:${requestId}`;
+
+    // For load-balanced envs, x-forwarded-for contains the real client IP
+    const forwarded = req.headers['x-forwarded-for'];
+    const clientIp = forwarded
+      ? (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : forwarded[0])
+      : req.ip || (req as any).socket?.remoteAddress || 'unknown';
+    return `${routeKey}::ip:${clientIp}`;
   }
 
   private evictIfNeeded(): void {
