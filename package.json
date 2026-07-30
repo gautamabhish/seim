@@ -1,11 +1,15 @@
 {
   "name": "seim-core",
-  "version": "0.3.0",
+  "version": "0.1.0",
   "description": "Self-Evolving Infrastructure Middleware — a self-evolving, framework-agnostic runtime with multi-generation optimization, cross-route intelligence, and explainable AI",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "seim": "dist/cli/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/worm-evolution/seim.git"
   },
   "scripts": {
     "build": "tsc",
