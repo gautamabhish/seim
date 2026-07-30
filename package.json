@@ -1,5 +1,5 @@
 {
-  "name": "seim",
+  "name": "seim-core",
   "version": "0.3.0",
   "description": "Self-Evolving Infrastructure Middleware — a self-evolving, framework-agnostic runtime with multi-generation optimization, cross-route intelligence, and explainable AI",
   "main": "dist/index.js",
