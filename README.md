@@ -1,7 +1,8 @@
 # SEIM — Self-Evolving Infrastructure Middleware
 
-SEIM is a framework-agnostic, self-optimizing runtime for Node.js applications. It observes your API traffic, detects performance anti-patterns, generates safe optimizations, validates them through shadow testing, and promotes only the versions that are provably correct, secure, and faster. It ships with a CLI, structured observability, production-grade lifecycle management, and support for Express, Fastify, and generic HTTP servers.
+SEIM (in dev , please report the issues directly to us )  is a framework-agnostic, self-optimizing runtime for Node.js applications. It observes your API traffic, detects performance anti-patterns, generates safe optimizations, validates them through shadow testing, and promotes only the versions that are provably correct, secure, and faster. It ships with a CLI, structured observability, production-grade lifecycle management, and support for Express, Fastify, and generic HTTP servers.
 
+## CONTRIBUTE AT https://github.com/worm-evolution/seim
 ## Features
 
 - **Framework Agnostic**: Works with Express, Fastify, or any Node.js HTTP server
@@ -20,7 +21,7 @@ SEIM is a framework-agnostic, self-optimizing runtime for Node.js applications. 
 ## Install
 
 ```bash
-npm install seim
+npm i seim-core
 ```
 
 Requires **Node.js 18+**.
