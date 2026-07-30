@@ -20,7 +20,7 @@ SEIM (in dev , please report the issues directly to us )  is a framework-agnosti
 ## Install
 
 ```bash
-npm install seim
+npm i seim-core
 ```
 
 Requires **Node.js 18+**.
