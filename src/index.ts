@@ -32,6 +32,17 @@ import {
   LearnedPatternRegistry,
   DriftDetector,
 } from './evolution';
+import { SchemaValidator } from './schemaValidator';
+import { SchemaRegistry } from './schemaRegistry';
+import { BusinessMetricsStore } from './businessMetrics';
+import { AnalyticsAdapter } from './analytics/adapter';
+import { BehaviorAnalysisEngine } from './behaviorAnalysis';
+import { FeatureEvolutionEngine } from './featureEvolution';
+import { ABTestEngine } from './abTesting';
+import { FrontendEvolutionEngine } from './frontendEvolution';
+import { ComponentRegistry } from './componentRegistry';
+import { CodeValidator } from './codeValidator';
+import { FeatureFlagEngine } from './featureFlags';
 
 export * from './types';
 export { mergeConfig } from './config';
@@ -60,7 +71,70 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   const llm = new LLMClient(config);
   const sandbox = new Sandbox();
   const optimization = new OptimizationEngine(config, llm);
-  const validation = new ValidationEngine(config, llm);
+  
+  // Schema validation for feature evolution
+  const schemaValidator = new SchemaValidator();
+  const schemaRegistry = new SchemaRegistry(config.storagePath);
+  const validation = new ValidationEngine(config, llm, schemaValidator, schemaRegistry);
+  
+  // Business metrics and analytics for feature evolution
+  let businessMetrics: BusinessMetricsStore | undefined;
+  let analytics: AnalyticsAdapter;
+  let behaviorAnalysis: BehaviorAnalysisEngine | undefined;
+  
+  if (config.businessMetrics?.enabled) {
+    businessMetrics = new BusinessMetricsStore(config.storagePath);
+    analytics = new AnalyticsAdapter();
+    if (config.businessMetrics.analyticsProvider === 'mixpanel' && config.businessMetrics.apiKey) {
+      analytics.integrateMixpanel(config.businessMetrics.apiKey);
+    } else if (config.businessMetrics.analyticsProvider === 'amplitude' && config.businessMetrics.apiKey) {
+      analytics.integrateAmplitude(config.businessMetrics.apiKey);
+    } else if (config.businessMetrics.analyticsProvider === 'ga' && config.businessMetrics.apiKey) {
+      analytics.integrateGoogleAnalytics(config.businessMetrics.apiKey);
+    }
+    
+    if (config.featureEvolution?.enabled) {
+      behaviorAnalysis = new BehaviorAnalysisEngine(config, analytics, businessMetrics);
+      
+      // Integrate behavior analysis with business metrics
+      // When events are tracked, also analyze for behavior patterns
+      const originalRecordEngagement = businessMetrics.recordEngagement.bind(businessMetrics);
+      businessMetrics.recordEngagement = (routeKey: string, action: string, userId: string, properties?: any) => {
+        originalRecordEngagement(routeKey, action, userId, properties);
+        if (behaviorAnalysis) {
+          behaviorAnalysis.recordAction(userId, action, properties);
+        }
+      };
+    }
+  } else {
+    analytics = new AnalyticsAdapter();
+  }
+  
+  // Feature evolution and A/B testing
+  const featureEvolution = new FeatureEvolutionEngine(
+    config,
+    llm,
+    businessMetrics || new BusinessMetricsStore(config.storagePath),
+    behaviorAnalysis,
+    events,
+    logger
+  );
+  const abTesting = new ABTestEngine(config, businessMetrics || new BusinessMetricsStore(config.storagePath), events, logger);
+  
+  // Frontend evolution
+  const frontendEvolution = new FrontendEvolutionEngine(
+    config,
+    llm,
+    schemaRegistry,
+    events,
+    logger
+  );
+  const componentRegistry = new ComponentRegistry(config, logger);
+  const codeValidator = new CodeValidator(config, logger);
+  
+  // Feature flags
+  const featureFlags = new FeatureFlagEngine(config, events, logger);
+  
   const rollback = new RollbackEngine(config);
   const shadow = new ShadowTestEngine();
   const shadowLimiter = new ShadowLimiter(config);
@@ -97,6 +171,11 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   const deps = {
     metrics, optimization, validation, shadow, rollback, learning, sandbox,
     shadowLimiter, metricsAnalyzer, endpointTracker, adapter, events, logger, worker,
+    schemaValidator, schemaRegistry,
+    businessMetrics, analytics, behaviorAnalysis,
+    featureEvolution, abTesting,
+    frontendEvolution, componentRegistry, codeValidator,
+    featureFlags,
   };
 
   // Start the background worker if enabled
@@ -107,6 +186,127 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   // Start drift detection if evolution + drift detection enabled
   if (config.evolution?.enabled !== false && config.evolution?.driftDetection) {
     driftDetector.start();
+  }
+
+  // Wire feature evolution events if enabled
+  if (config.featureEvolution?.enabled) {
+    events.on('feature:opportunities_analyzed', async (payload: any) => {
+      const { routeKey, opportunities } = payload;
+      if (opportunities.length > 0) {
+        // Generate variants for high-confidence opportunities
+        for (const opportunity of opportunities.filter((o: any) => o.confidence > 0.7)) {
+          try {
+            const variant = await featureEvolution.generateFeatureVariant(routeKey, opportunity);
+            if (variant) {
+              events.emitEvent('feature:variant_generated', { routeKey, variant, opportunity });
+            }
+          } catch (error) {
+            logger.warn('Failed to generate feature variant', { routeKey, opportunity, error });
+          }
+        }
+      }
+    });
+
+    events.on('feature:variant_generated', async (payload: any) => {
+      const { routeKey, variant } = payload;
+      if (config.featureEvolution?.autoABTest) {
+        // Start A/B test for the variant
+        try {
+          const test = abTesting.createTest({
+            featureId: routeKey,
+            sampleSize: config.featureEvolution.abTestSampleSize || 1000,
+            duration: config.featureEvolution.abTestDuration || 7 * 24 * 60 * 60 * 1000,
+            trafficSplit: { control: 50, [variant.id]: 50 },
+            successMetrics: ['conversionRate', 'engagement', 'retention']
+          });
+          abTesting.startTest(test.id);
+          events.emitEvent('feature:abtest_started', { testId: test.id, routeKey });
+        } catch (error) {
+          logger.warn('Failed to start A/B test', { routeKey, variant, error });
+        }
+      }
+    });
+
+    events.on('feature:abtest_completed', async (payload: any) => {
+      const { testId, winner, confidence } = payload;
+      if (confidence > 0.95 && winner) {
+        // Promote winner to production
+        logger.info('Promoting A/B test winner to production', { testId, winner });
+        events.emitEvent('feature:winner_promoted', { testId, winner });
+      }
+    });
+  }
+
+  // Wire frontend evolution events if enabled
+  if (config.frontendEvolution?.enabled) {
+    events.on('schema:change', async (payload: any) => {
+      const { change } = payload;
+      await frontendEvolution.handleSchemaChange(change);
+    });
+
+    events.on('frontend:component_generated', async (payload: any) => {
+      const { component } = payload;
+      // Validate the generated component
+      const validation = codeValidator.validateFrontendCode(component.code, component.framework);
+      if (validation.pass) {
+        componentRegistry.registerComponent(component);
+        logger.info('Frontend component registered', { componentId: component.id });
+      } else {
+        logger.warn('Frontend component failed validation', {
+          componentId: component.id,
+          errors: validation.errors
+        });
+        // Manually set the component status to rejected
+        component.status = 'rejected';
+        component.rejectedAt = Date.now();
+        component.metadata.rejectionReason = 'Code validation failed';
+      }
+    });
+
+    events.on('frontend:component_approved', async (payload: any) => {
+      const { component } = payload;
+      if (config.frontendEvolution?.autoDeploy) {
+        componentRegistry.activateComponent(component.id);
+        logger.info('Frontend component auto-deployed', { componentId: component.id });
+      }
+    });
+  }
+
+  // Wire feature flags events if enabled
+  if (config.featureFlags?.enabled) {
+    events.on('feature:winner_promoted', async (payload: any) => {
+      const { winner } = payload;
+      // Create a feature flag for the winning variant
+      if (config.featureFlags?.autoCreateFlags) {
+        try {
+          const flag = featureFlags.createFlag({
+            key: `feature_${winner}`,
+            name: `Feature: ${winner}`,
+            description: 'Auto-created flag from A/B test winner',
+            enabled: false,
+            rolloutPercentage: 0,
+            targetType: 'all',
+            targetSegments: [],
+            conditions: [],
+            metadata: {
+              source: 'abtest',
+              winnerId: winner
+            }
+          });
+          logger.info('Feature flag auto-created from A/B test winner', { flagId: flag.id });
+        } catch (error) {
+          logger.warn('Failed to auto-create feature flag', { winner, error });
+        }
+      }
+    });
+
+    events.on('featureflag:created', async (payload: any) => {
+      const { flag } = payload;
+      if (config.featureFlags?.autoRollout && flag.enabled) {
+        // Start gradual rollout
+        featureFlags.gradualRollout(flag.id, flag.rolloutPercentage, config.featureFlags?.rolloutDuration || 7 * 24 * 60 * 60 * 1000);
+      }
+    });
   }
 
   // Wire learning into the optimization lifecycle via events
@@ -223,6 +423,8 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
     productionManager,
     dynamicRouter,
     versionManager,
+    ...(config.businessMetrics?.enabled && config.featureEvolution?.enabled ? { businessMetrics } : {}),
+    ...(config.businessMetrics?.enabled && config.featureEvolution?.enabled ? { behaviorAnalysis } : {}),
   };
 
   // Wire up studio dashboard with the real instance
