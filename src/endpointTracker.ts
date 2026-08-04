@@ -157,6 +157,10 @@ export class EndpointTracker {
     }
   }
 
+  public resetRoute(routeKey: string): void {
+    this.endpoints.delete(routeKey);
+  }
+
   public clear(): void {
     this.endpoints.clear();
   }

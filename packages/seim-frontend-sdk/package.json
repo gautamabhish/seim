@@ -1,0 +1,48 @@
+{
+  "name": "@seim/frontend-sdk",
+  "version": "1.0.0",
+  "description": "Frontend SDK for SEIM (Self-Evolving Infrastructure Middleware)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react.js",
+      "require": "./dist/react.js",
+      "types": "./dist/react.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "seim",
+    "frontend",
+    "sdk",
+    "feature-flags",
+    "schema-evolution"
+  ],
+  "author": "SEIM",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "react-dom": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  }
+}

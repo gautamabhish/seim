@@ -53,6 +53,17 @@ export function getDefaultConfig(): SeimConfig {
     businessRules: [],
     securityRules: [],
     production: {},
+    build: {
+      enabled: false,
+      buildCommand: 'npm run build',
+      outputDir: './dist/optimized',
+      sourceDir: './src',
+      typescript: true,
+      minify: true,
+      sourcemap: true,
+      autoBuild: false,
+      buildTimeout: 60000
+    },
     ai: {
       generatorModel: 'gpt-4',
       reviewerModel: 'gpt-4',

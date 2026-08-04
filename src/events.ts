@@ -25,6 +25,21 @@ export interface SeimEvents {
   'evolution:pattern-learned': { name: string; description: string; extractedFrom: string; improvement: number };
   'evolution:propagated': { sourceRoute: string; targetRoutes: string[]; pattern: string; sharedFunctionCount: number };
   'evolution:drift-detected': { routeKey: string; currentP95: number; promotedP95: number; degradationPercent: number };
+  'schema:change': { change: any };
+  'feature:opportunities_analyzed': { routeKey: string; opportunities: any[]; insights: any };
+  'feature:variant_generated': { routeKey: string; variant: any; opportunity: any };
+  'feature:abtest_started': { testId: string; routeKey: string };
+  'feature:abtest_completed': { testId: string; winner: string; confidence: number };
+  'feature:winner_promoted': { testId: string; winner: string };
+  'frontend:evolution_queued': { change: any };
+  'frontend:component_generated': { component: any; change: any };
+  'frontend:component_approved': { component: any };
+  'frontend:component_rejected': { component: any; reason: string };
+  'frontend:component_deployed': { component: any };
+  'featureflag:created': { flag: any };
+  'featureflag:updated': { flagId: string; updates: any };
+  'featureflag:deleted': { flagId: string };
+  'featureflag:rollout_completed': { flagId: string; targetPercentage: number };
 }
 
 export type SeimEventName = keyof SeimEvents;

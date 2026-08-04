@@ -44,6 +44,20 @@ export class ExpressAdapter implements FrameworkAdapter {
           error: res.statusCode >= 500 || timeout,
           timeout,
         };
+        
+        // Add evolution signals to response headers if enabled
+        if (res.seimEvolution) {
+          if (res.seimEvolution.schemaVersion) {
+            res.setHeader('X-SEIM-Schema-Version', res.seimEvolution.schemaVersion);
+          }
+          if (res.seimEvolution.featureVariant) {
+            res.setHeader('X-SEIM-Feature-Variant', res.seimEvolution.featureVariant);
+          }
+          if (res.seimEvolution.newFields && res.seimEvolution.newFields.length > 0) {
+            res.setHeader('X-SEIM-New-Fields', res.seimEvolution.newFields.join(','));
+          }
+        }
+        
         // Fire and forget — errors handled internally
         try {
           const result = onResponse(req, res, routeKey, info);

@@ -35,6 +35,17 @@ export interface SeimConfig {
     };
     requireIsolatedVm?: boolean;
   };
+  build?: {
+    enabled: boolean;
+    buildCommand: string;
+    outputDir: string;
+    sourceDir: string;
+    typescript: boolean;
+    minify: boolean;
+    sourcemap: boolean;
+    autoBuild: boolean;
+    buildTimeout: number;
+  };
   ai: {
     generatorModel: string;
     reviewerModel: string;
@@ -89,6 +100,48 @@ export interface SeimConfig {
     rateLimit?: boolean;
   };
   evolution?: Partial<EvolutionConfig>;
+  schemaEvolution?: {
+    mode: 'strict' | 'compatible' | 'permissive';
+    allowBreakingChanges: boolean;
+    requireApiVersioning: boolean;
+    notifyOnSchemaChange: boolean;
+    allowedAdditions: string[];
+  };
+  businessMetrics?: {
+    enabled: boolean;
+    kpis: string[];
+    analyticsProvider?: 'mixpanel' | 'amplitude' | 'ga' | 'custom';
+    apiKey?: string;
+    dataSource?: 'custom' | 'analytics' | 'database';
+  };
+  featureEvolution?: {
+    enabled: boolean;
+    aiProvider?: 'openai' | 'anthropic' | 'custom';
+    behaviorDataSource?: 'analytics' | 'database' | 'custom';
+    abTestSampleSize: number;
+    abTestDuration: number;
+    statisticalSignificance: number;
+    autoABTest?: boolean;
+  };
+  frontendEvolution?: {
+    enabled: boolean;
+    framework: 'react' | 'vue' | 'angular' | 'vanilla';
+    codeValidation: 'strict' | 'moderate' | 'permissive';
+    requireCodeSigning: boolean;
+    sandboxExecution: boolean;
+    componentCacheDuration: number;
+    allowedDependencies: string[];
+    autoGenerate?: boolean;
+    autoDeploy?: boolean;
+  };
+  featureFlags?: {
+    enabled: boolean;
+    storage?: 'memory' | 'redis' | 'database';
+    emergencyKillSwitch: boolean;
+    autoCreateFlags?: boolean;
+    autoRollout?: boolean;
+    rolloutDuration?: number;
+  };
 }
 
 export interface RouteMetrics {
@@ -137,6 +190,7 @@ export interface ValidationReport {
   candidateId: string;
   layer1Schema: { pass: boolean; reason?: string };
   layer2ResponseEquivalence: { pass: boolean; reason?: string };
+  layer2bSchemaCompatibility: { pass: boolean; reason?: string };
   layer3BusinessRules: { pass: boolean; violations: string[] };
   layer4UnitTests: { pass: boolean; reason?: string };
   layer5IntegrationTests: { pass: boolean; reason?: string };
@@ -195,6 +249,9 @@ export interface SeimInstance {
   productionManager?: any;
   dynamicRouter?: any;
   versionManager?: any;
+  businessMetrics?: any;
+  behaviorAnalysis?: any;
+  buildService?: any;
 }
 
 export type RequestListener = (req: Request, res: Response, next: NextFunction) => void;
@@ -274,4 +331,167 @@ export interface OptimizationExplanation {
   lineage: string[];
   relatedOptimizations: string[];
   timestamp: number;
+}
+
+// Feature Evolution Types
+export interface FeatureOpportunity {
+  id: string;
+  type: 'personalization' | 'recommendation' | 'pricing' | 'content';
+  description: string;
+  expectedImpact: number;
+  confidence: number;
+}
+
+export interface FeatureVariant {
+  id: string;
+  code: string;
+  strategy: string;
+  metadata: Record<string, any>;
+}
+
+export interface UserBehaviorData {
+  userId: string;
+  actions: UserAction[];
+  segments: string[];
+  kpis: Record<string, number>;
+}
+
+export interface UserAction {
+  action: string;
+  timestamp: number;
+  properties: Record<string, any>;
+}
+
+// Frontend Evolution Types
+export interface ComponentUpdate {
+  componentId: string;
+  code: string;
+  version: string;
+  dependencies: string[];
+  framework: string;
+  checksum: string;
+}
+
+export interface BackendChange {
+  field: string;
+  type: 'added' | 'removed' | 'modified';
+  description: string;
+}
+
+export interface ComponentVersion {
+  id: string;
+  version: string;
+  code: string;
+  dependencies: string[];
+  createdAt: number;
+  checksum: string;
+}
+
+// A/B Testing Types
+export interface ABTest {
+  id: string;
+  featureId: string;
+  variants: FeatureVariant[];
+  status: 'created' | 'running' | 'completed' | 'stopped';
+  startedAt: number;
+  endedAt?: number;
+  config: ABTestConfig;
+}
+
+export interface ABTestConfig {
+  featureId: string;
+  sampleSize: number;
+  duration: number;
+  trafficSplit: Record<string, number>;
+  successMetrics: string[];
+}
+
+export interface StatisticalResult {
+  significant: boolean;
+  confidence: number;
+  winner?: string;
+  pValue: number;
+}
+
+export interface TestResult {
+  winner: string;
+  confidence: number;
+  improvement: number;
+  recommendations: string[];
+}
+
+// Schema Evolution Types
+export interface SchemaChange {
+  id: string;
+  routeKey: string;
+  oldVersion: string;
+  newVersion: string;
+  type: 'backward_compatible' | 'breaking';
+  description: string;
+  changedFields: string[];
+  timestamp: number;
+}
+
+export interface SchemaVersion {
+  version: string;
+  routeKey: string;
+  schema: any;
+  createdAt: number;
+}
+
+// Frontend Evolution Types
+export interface FrontendComponent {
+  id: string;
+  routeKey: string;
+  framework: string;
+  code: string;
+  schemaVersion: string;
+  generatedAt: number;
+  status: 'pending' | 'approved' | 'rejected' | 'deployed' | 'active' | 'rollback_available';
+  approvedAt?: number;
+  rejectedAt?: number;
+  deployedAt?: number;
+  metadata: {
+    changeId?: string;
+    reviewPassed?: boolean;
+    reviewReason?: string;
+    rejectionReason?: string;
+  };
+}
+
+// Feature Flags Types
+export interface FeatureFlag {
+  id: string;
+  key: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  rolloutPercentage: number;
+  targetSegments: string[];
+  targetType: 'all' | 'segment' | 'user' | 'none';
+  conditions: any[];
+  metadata: Record<string, any>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface FlagEvaluationContext {
+  userId: string;
+  segments?: string[];
+  attributes?: Record<string, any>;
+  timestamp?: number;
+}
+
+export interface StatisticalResult {
+  significant: boolean;
+  confidence: number;
+  winner?: string;
+  pValue: number;
+}
+
+export interface TestResult {
+  winner: string;
+  confidence: number;
+  improvement: number;
+  recommendations: string[];
 }

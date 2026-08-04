@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEIM // Developer Control Dashboard</title>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glass-bg"></div>
+  <div class="glow-orb orb-1"></div>
+  <div class="glow-orb orb-2"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="main-header">
+      <div class="logo-area">
+        <span class="logo-icon">🤖</span>
+        <div class="logo-text">
+          <h1>SEIM</h1>
+          <p>Self-Evolving Optimization Middleware</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-green" id="server-status-badge">● API System Active</span>
+        <span class="badge badge-purple" id="env-badge">Production Mode</span>
+        <span class="badge badge-blue" id="uptime-badge">Uptime: 0s</span>
+      </div>
+    </header>
+
+    <!-- Stats Dashboard Grid -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <h3>Average Latency</h3>
+        <div class="stat-value text-glow-green" id="avg-latency-val">0ms</div>
+        <p class="stat-sub">Telemetry window average</p>
+      </div>
+      <div class="stat-card">
+        <h3>Request Count</h3>
+        <div class="stat-value text-glow-blue" id="req-count-val">0</div>
+        <p class="stat-sub">Total dashboard hits recorded</p>
+      </div>
+      <div class="stat-card">
+        <h3>Active Middleware Version</h3>
+        <div class="stat-value text-glow-purple" id="active-ver-val">Original</div>
+        <p class="stat-sub" id="active-handler-name">Handler: fastHandler</p>
+      </div>
+      <div class="stat-card">
+        <h3>Active Shadow Tests</h3>
+        <div class="stat-value text-glow-amber" id="shadow-tests-val">0</div>
+        <p class="stat-sub">Simultaneous isolates evaluating</p>
+      </div>
+    </section>
+
+    <!-- Main Workspace Layout -->
+    <div class="workspace-layout">
+      <!-- Left side: Controller Panel -->
+      <aside class="sidebar-panel">
+        <!-- Control Card -->
+        <div class="glass-card controller-card">
+          <h2><span class="card-icon">⚡</span> Controls & Sandbox Simulation</h2>
+          
+          <div class="control-section">
+            <h4>Step 1: Inject Anti-Pattern Latency</h4>
+            <p class="section-desc">Inject a slow synchronous bottleneck into the analytics dashboard route to trigger the analyzer.</p>
+            <div class="btn-group">
+              <button class="btn btn-danger" id="btn-inject-delay">Inject Sequential Delay (1.2s)</button>
+              <button class="btn btn-secondary" id="btn-restore-fast">Reset to Baseline (0ms delay)</button>
+            </div>
+          </div>
+
+          <div class="control-section">
+            <h4>Step 2: Generate Traffic</h4>
+            <p class="section-desc">Simulate live concurrent requests. SEIM requires 10 warmup requests before evaluating candidate optimization code.</p>
+            <div class="btn-group">
+              <button class="btn btn-primary" id="btn-gen-traffic">Send 12 Load-test Requests</button>
+              <button class="btn btn-secondary" id="btn-single-req">Send Single Request</button>
+            </div>
+            <div class="progress-bar-container" style="display: none;" id="traffic-progress-box">
+              <div class="progress-bar-label">Sending Traffic... <span id="progress-text">0/12</span></div>
+              <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="progress-fill" style="width: 0%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="control-section">
+            <h4>Optimization Stats</h4>
+            <div class="stats-list">
+              <div class="stats-item">
+                <span>Total Candidates Detected</span>
+                <strong id="stat-candidates-gen">0</strong>
+              </div>
+              <div class="stats-item">
+                <span>Optimizations Promoted</span>
+                <strong class="color-green" id="stat-promoted-count">0</strong>
+              </div>
+              <div class="stats-item">
+                <span>Active VM Isolates</span>
+                <strong id="stat-worker-queue">0</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center: Code Viewer & Diff Display -->
+      <main class="code-panel">
+        <div class="glass-card code-card">
+          <div class="code-header">
+            <h2><span class="card-icon">💻</span> Route Engine Code Isolation</h2>
+            <div class="code-tabs">
+              <button class="tab-btn active" id="tab-active-code">Active Code</button>
+              <button class="tab-btn" id="tab-diff-view">Optimization Diff</button>
+            </div>
+          </div>
+          
+          <div class="code-viewer-container">
+            <!-- Active Code Tab Content -->
+            <div class="tab-content" id="content-active-code">
+              <pre><code class="language-js" id="code-display">Loading route code...</code></pre>
+            </div>
+
+            <!-- Diff View Tab Content -->
+            <div class="tab-content" id="content-diff-view" style="display: none;">
+              <div class="diff-split-container">
+                <div class="diff-column">
+                  <h4>Original Handler (Slow Path)</h4>
+                  <pre class="diff-block diff-removed"><code id="diff-removed-display">// No active optimizations promoted yet.</code></pre>
+                </div>
+                <div class="diff-column">
+                  <h4>Optimized Handler (Hot Path)</h4>
+                  <pre class="diff-block diff-added"><code id="diff-added-display">// Run traffic to self-evolve optimization code.</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- Right side: Realtime Event Console -->
+      <section class="console-panel">
+        <div class="glass-card console-card">
+          <div class="console-header">
+            <h2><span class="card-icon">📟</span> SEIM Event Telemetry</h2>
+            <button class="btn btn-small-secondary" id="btn-clear-console">Clear</button>
+          </div>
+          <div class="console-screen" id="console-output">
+            <div class="console-line system-msg">[SYSTEM] Listening for SEIM lifecycle telemetry events...</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
