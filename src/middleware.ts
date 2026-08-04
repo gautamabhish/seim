@@ -49,6 +49,60 @@ export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => 
       // onResponse — records metrics, enqueues optimization work
       (_req: any, _res: any, routeKey: string, info) => {
         try {
+          // Cache source code for background worker (req.route is populated on response finish)
+          const routeInfo = findRouteHandler(_req);
+          if (routeInfo) {
+            sourceCache.set(routeKey, routeInfo.source);
+          }
+
+          // Check for pending candidates that need shadow testing
+          const pending = pendingCandidates.get(routeKey);
+          if (pending && routeInfo && config.mode === 'bypass') {
+            pendingCandidates.delete(routeKey);
+            const optimized = buildOptimizedHandler(pending, deps.sandbox, config.experiment.sandboxTimeoutMs || 500);
+            deps.shadow.run(routeKey, routeInfo.handle, optimized, _req)
+              .then(async (result) => {
+                const validated = await deps.validation.validate(pending, result.v1Output, result.v2Output, _req, {
+                  v1Latency: result.v1Latency,
+                  v2Latency: result.v2Latency,
+                });
+                if (validated.overall) {
+                  deps.rollback.registerShadow(routeKey, { route: routeInfo.route, index: routeInfo.index }, routeInfo.handle, optimized);
+                  const report = deps.shadow.getReport(routeKey);
+                  if (report && report.sampleSize >= config.experiment.shadowSampleSize) {
+                    const evalResult = deps.rollback.evaluate(routeKey, report);
+                    if (evalResult === 'promote') {
+                      deps.endpointTracker.recordSuccess(routeKey);
+                      deps.events.emitEvent('optimization:promoted', {
+                        routeKey,
+                        candidateId: pending.id,
+                        latencyImprovement: result.v1Latency - result.v2Latency,
+                      });
+                      deps.logger.info('Optimization promoted', {
+                        routeKey,
+                        candidateId: pending.id,
+                        improvement: `${Math.round(result.v1Latency - result.v2Latency)}ms`,
+                      });
+                    }
+                  }
+                } else {
+                  deps.endpointTracker.markAsNonOptimizable(routeKey, 'Validation failed');
+                  deps.events.emitEvent('optimization:rejected', {
+                    routeKey,
+                    candidateId: pending.id,
+                    reason: 'Validation failed',
+                  });
+                }
+              })
+              .catch((err) => {
+                deps.endpointTracker.markAsNonOptimizable(routeKey, 'Shadow test error');
+                deps.events.emitEvent('error:sandbox', {
+                  routeKey,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
+          }
+
           deps.metrics.record(routeKey, info.duration, info.statusCode, info.responseSize, info.payloadSize, info.error, info.timeout);
 
           // Feed health data to endpoint tracker

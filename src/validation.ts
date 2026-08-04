@@ -69,6 +69,8 @@ export class ValidationEngine {
       report.layer7AICritic.pass &&
       report.layer8PerformanceGate.pass;
 
+    console.log('📊 [SEIM DEBUG] Validation Report:', JSON.stringify(report, null, 2));
+
     return report;
   }
 

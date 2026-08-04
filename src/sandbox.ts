@@ -84,6 +84,7 @@ export class Sandbox {
     const closureFns = this.extractClosureFunctions(originalSource);
 
     const context = vm.createContext({
+      ...global,
       console,
       Buffer,
       Promise,

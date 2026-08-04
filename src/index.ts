@@ -73,9 +73,14 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   const sandbox = new Sandbox();
   const optimization = new OptimizationEngine(config, llm);
   
+  // Persistent storage directory and file paths
+  const storagePath = config.storagePath ?? './.seim-storage';
+  const schemasPath = `${storagePath}/schemas.json`;
+  const businessMetricsPath = `${storagePath}/business-metrics.json`;
+
   // Schema validation for feature evolution
   const schemaValidator = new SchemaValidator();
-  const schemaRegistry = new SchemaRegistry(config.storagePath);
+  const schemaRegistry = new SchemaRegistry(schemasPath);
   const validation = new ValidationEngine(config, llm, schemaValidator, schemaRegistry);
   
   // Business metrics and analytics for feature evolution
@@ -84,7 +89,7 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   let behaviorAnalysis: BehaviorAnalysisEngine | undefined;
   
   if (config.businessMetrics?.enabled) {
-    businessMetrics = new BusinessMetricsStore(config.storagePath);
+    businessMetrics = new BusinessMetricsStore(businessMetricsPath);
     analytics = new AnalyticsAdapter();
     if (config.businessMetrics.analyticsProvider === 'mixpanel' && config.businessMetrics.apiKey) {
       analytics.integrateMixpanel(config.businessMetrics.apiKey);
@@ -115,12 +120,12 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   const featureEvolution = new FeatureEvolutionEngine(
     config,
     llm,
-    businessMetrics || new BusinessMetricsStore(config.storagePath),
+    businessMetrics || new BusinessMetricsStore(businessMetricsPath),
     behaviorAnalysis,
     events,
     logger
   );
-  const abTesting = new ABTestEngine(config, businessMetrics || new BusinessMetricsStore(config.storagePath), events, logger);
+  const abTesting = new ABTestEngine(config, businessMetrics || new BusinessMetricsStore(businessMetricsPath), events, logger);
   
   // Frontend evolution
   const frontendEvolution = new FrontendEvolutionEngine(
@@ -158,7 +163,6 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   const dynamicRouter = new DynamicRouter(productionManager);
 
   // Persistent learning with file-backed storage
-  const storagePath = config.storagePath ?? './.seim-storage';
   const learningPath = `${storagePath}/learning.json`;
   const patternsPath = `${storagePath}/learned-patterns.json`;
   const learning = new LearningMemoryStore(learningPath);

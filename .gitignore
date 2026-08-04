@@ -5,3 +5,5 @@ dist/
 .env
 .seim/
 coverage/
+scratch/
+demo-app/.seim-storage/
