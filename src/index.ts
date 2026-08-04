@@ -43,6 +43,7 @@ import { FrontendEvolutionEngine } from './frontendEvolution';
 import { ComponentRegistry } from './componentRegistry';
 import { CodeValidator } from './codeValidator';
 import { FeatureFlagEngine } from './featureFlags';
+import { BuildService } from './buildService';
 
 export * from './types';
 export { mergeConfig } from './config';
@@ -134,6 +135,19 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   
   // Feature flags
   const featureFlags = new FeatureFlagEngine(config, events, logger);
+  
+  // Build service for production-safe code generation
+  let buildService: BuildService | undefined;
+  if (config.build?.enabled) {
+    buildService = new BuildService({
+      buildCommand: config.build.buildCommand,
+      outputDir: config.build.outputDir,
+      sourceDir: config.build.sourceDir,
+      typescript: config.build.typescript,
+      minify: config.build.minify,
+      sourcemap: config.build.sourcemap
+    });
+  }
   
   const rollback = new RollbackEngine(config);
   const shadow = new ShadowTestEngine();
@@ -425,6 +439,7 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
     versionManager,
     ...(config.businessMetrics?.enabled && config.featureEvolution?.enabled ? { businessMetrics } : {}),
     ...(config.businessMetrics?.enabled && config.featureEvolution?.enabled ? { behaviorAnalysis } : {}),
+    ...(config.build?.enabled ? { buildService } : {}),
   };
 
   // Wire up studio dashboard with the real instance

@@ -35,6 +35,17 @@ export interface SeimConfig {
     };
     requireIsolatedVm?: boolean;
   };
+  build?: {
+    enabled: boolean;
+    buildCommand: string;
+    outputDir: string;
+    sourceDir: string;
+    typescript: boolean;
+    minify: boolean;
+    sourcemap: boolean;
+    autoBuild: boolean;
+    buildTimeout: number;
+  };
   ai: {
     generatorModel: string;
     reviewerModel: string;
@@ -240,6 +251,7 @@ export interface SeimInstance {
   versionManager?: any;
   businessMetrics?: any;
   behaviorAnalysis?: any;
+  buildService?: any;
 }
 
 export type RequestListener = (req: Request, res: Response, next: NextFunction) => void;
