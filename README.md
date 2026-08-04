@@ -267,6 +267,35 @@ process.on('SIGTERM', async () => {
 });
 ```
 
+## 🎮 Interactive Full-Stack Developer Dashboard (Demo Playground)
+
+We have built a fully featured developer playground and dashboard under [`demo-app/`](./demo-app). This dashboard provides developers with a visual interface to simulate, monitor, and benchmark SEIM's runtime evolution.
+
+### Features
+* **Real-time Event Stream**: Watch SEIM dispatch workers, shadow-test candidates, validate code layers, and promote hot routes.
+* **Canary Telemetry Dashboard**: Neon-glowing latency status cards mapping request totals and active VM sandboxes.
+* **Endpoint Delay Injector**: Inject sequential async delays (1.2s bottleneck) into `/api/analytics/dashboard` or reset back to baseline.
+* **Traffic Load Generator**: Simulates concurrent HTTP traffic to trigger the SEIM optimization worker loop.
+* **Live Code Diff Viewer**: Compares the original unoptimized code against the promoted optimization side-by-side in real-time.
+
+### Running the Dashboard
+1. **Navigate to the demo folder and install dependencies**:
+   ```bash
+   cd demo-app
+   npm install
+   ```
+2. **Start the Express server** (passing your Gemini API key through the environment):
+   ```bash
+   GEMINI_API_KEY=YOUR_API_KEY_HERE npm start
+   ```
+3. **Open in browser**: Navigate to **`http://localhost:3005`** and interact with the panel.
+
+### Running Automated Integration Tests
+You can execute the automated demo flow integration test script to verify the entire pipeline (telemetry -> worker -> LLM analyzer fallback -> shadow test -> hot swap promotion):
+```bash
+node demo-app/test_demo_flow.js
+```
+
 ## Testing
 
 SEIM includes a comprehensive test suite:
@@ -285,19 +314,19 @@ npm run test:integration  # Integration tests
 
 ### Test Coverage
 
-- **Unit Tests**: metrics analyzer, endpoint tracker, version manager
-- **Stress Tests**: load handling and memory efficiency
-- **Benchmark Tests**: performance metrics and overhead
-- **Feasibility Tests**: adoption feasibility metrics
-- **Integration Tests**: complete workflow scenarios
+* **Unit Tests**: metrics analyzer, endpoint tracker, version manager
+* **Stress Tests**: load handling and memory efficiency
+* **Benchmark Tests**: performance metrics and overhead
+* **Feasibility Tests**: adoption feasibility metrics
+* **Integration Tests**: complete workflow scenarios
 
 ### Test Results
 
-- **Total Tests**: 73
-- **Pass Rate**: 100%
-- **Performance**: Sub-millisecond operations for all components
-- **Scalability**: Linear scaling with load
-- **Memory Efficiency**: ~315 bytes per version
+* **Total Tests**: 73
+* **Pass Rate**: 100%
+* **Performance**: Sub-millisecond operations for all components
+* **Scalability**: Linear scaling with load
+* **Memory Efficiency**: ~315 bytes per version
 
 ## Directory Structure
 
@@ -306,7 +335,7 @@ seim/
 ├── src/
 │   ├── adapters/           # Framework adapters (Express/Fastify/generic)
 │   ├── cli/                # CLI commands
-│   ├── ai.ts               # AI client
+│   ├── ai.ts               # AI client with rate-limit recovery
 │   ├── autoMiddleware.ts   # Auto-middleware detection
 │   ├── config.ts           # Configuration management
 │   ├── configLoader.ts     # Config file discovery
@@ -322,14 +351,15 @@ seim/
 │   ├── persistentVersionManager.ts # Persistent version storage
 │   ├── productionManager.ts # Production deployment manager
 │   ├── rollback.ts         # Rollback mechanism
-│   ├── sandbox.ts          # Code execution sandbox
+│   ├── sandbox.ts          # Code execution sandbox with globals scope injector
 │   ├── shadow.ts           # Shadow testing engine
 │   ├── shadowLimiter.ts    # Shadow testing rate limiter
 │   ├── storageFactory.ts   # Storage adapter factory
 │   ├── types.ts            # TypeScript types
-│   ├── validation.ts       # Validation engine
+│   ├── validation.ts       # Validation engine with debug logger
 │   ├── versionManager.ts   # In-memory version management
 │   └── worker.ts           # Background optimization worker
+├── demo-app/               # Full-stack developer dashboard playground
 ├── tests/                  # Comprehensive test suite
 ├── examples/               # Example scripts
 ├── docs/                   # Documentation

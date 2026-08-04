@@ -1,0 +1,131 @@
+# SEIM (Self-Evolving Infrastructure Middleware) - Technical Reference Specification for LLMs
+
+This document serves as the complete technical specification of the SEIM runtime. It provides LLM code generators and agentic developers with a comprehensive reference of the system architectures, interfaces, event telemetries, and execution pipelines.
+
+---
+
+## 📂 Codebase File Layout
+
+```
+src/
+├── index.ts                # Main orchestrator, configuration discovery, and lifecycle binding
+├── types.ts                # Core shared type signatures, interfaces, and options definitions
+├── ai.ts                   # LLM Client integration (Google, OpenAI, Anthropic) with rate-limit recovery
+├── middleware.ts           # Interception hooks, telemetry metrics hooks, and worker dispatchers
+├── sandbox.ts              # VM/Isolate execution sandbox, global scope injector, wrapper compiler
+├── shadow.ts               # Async canary shadow testing, response capturing, latency measurement
+├── validation.ts           # Multi-layered validation suite (structural matching, unit test runner)
+├── security.ts             # Security gate analyzer (restricts payments, auth, raw secrets modifications)
+├── metrics.ts              # Telemetry metrics accumulator, percentile calculations, throughput tracker
+├── metricsAnalyzer.ts      # Statistical bottleneck analyzer, latency scoring, trigger evaluator
+├── endpointTracker.ts      # State tracker for route health, optimization history, and cooldowns
+├── rollback.ts             # Hot-path promotion manager, Express/Fastify route stack override, rollback logic
+└── adapters/
+    ├── express.ts          # Express.js HTTP route middleware adapter
+    └── fastify.ts          # Fastify plugin route middleware adapter
+```
+
+---
+
+## ⚙️ Core Modules Specification
+
+### 1. Main Orchestrator (`src/index.ts`)
+* **Purpose**: Coordinates all components. Binds lifecycle triggers.
+* **Instantiator**: `export function seim(config: SeimConfig): SeimInstance`.
+* **Properties**: Returns listener adapters, metrics, rollback stats, and configuration context.
+
+### 2. Sandbox VM Execution (`src/sandbox.ts`)
+* **Purpose**: Safely compiles and runs candidate optimization code off the hot path.
+* **Isolation Mechanics**:
+  * Utilizes `isolated-vm` (if installed) or falls back to Node.js built-in `vm` module.
+  * Contextual variables (like `req` and `res` structures) are explicitly mapped.
+* **Global Scope Injection**: To support handlers resolving external module-scoped variables (e.g. database connections), the sandbox spreads `...global` properties into the VM context:
+  ```ts
+  const context = vm.createContext({
+    ...global, // Spreads parent-level globals like users, products, db
+    console, Buffer, Promise, JSON, setTimeout, etc.
+  });
+  ```
+
+### 3. Canary Shadow Testing (`src/shadow.ts`)
+* **Purpose**: Runs V1 (original) and V2 (optimized) handlers sequentially in the background under live request contexts to compare response parity and performance improvements.
+* **Execution Flow**:
+  1. Executes V1 handler in original closure context. Captures HTTP JSON body outputs.
+  2. Executes V2 handler inside the sandboxed VM context. Captures HTTP JSON body outputs.
+  3. Records response latencies and handles errors safely. Returns comparison results.
+
+### 4. Multi-Layer Validation Suite (`src/validation.ts`)
+Before any optimization is promoted to production, it undergoes an 8-layer validation pipeline:
+1. **Schema Check**: Validates syntactical correctness of JavaScript function block.
+2. **Response Equivalence**: Checks structural matching of V1 and V2 HTTP responses. Timestamps and UUIDs are classified as dynamic and bypass strict value parity checks.
+3. **Schema Compatibility**: Verifies no breaking API JSON payload removals are introduced.
+4. **Business Rules Check**: Runs user-defined validation handlers against outputs.
+5. **Unit Tests Gate**: Executes `npm test` internally.
+6. **Integration Tests Gate**: Evaluates custom test suite script endpoints.
+7. **Security Gate**: Runs regex scanners in `security.ts` to block unsafe code modifications (e.g., changes to payments, authentication, auth tokens, or hardcoded secrets).
+8. **Performance Verification**: Validates that V2 latency is provably faster than V1.
+
+---
+
+## 📟 Typed Lifecycle Events & Event Telemetry
+
+SEIM communicates its internal lifecycle states via a central event emitter. Listening to these events is essential for live monitoring and dashboard streaming.
+
+| Event Name | Description | Payload Structure |
+| :--- | :--- | :--- |
+| `'optimization:detected'` | Emitted when a candidate pattern is flagged and worker analysis begins. | `{ routeKey: string, pattern: string, severity: 'high'\|'low', candidateId: string }` |
+| `'optimization:validated'` | Emitted after the validation suite finishes checking a candidate. | `{ routeKey: string, candidateId: string, report: ValidationReport }` |
+| `'optimization:promoted'` | Emitted when a candidate successfully passes validation and is hot-swapped. | `{ routeKey: string, candidateId: string, latencyImprovement: number }` |
+| `'optimization:rejected'` | Emitted when a candidate fails validation or compiler checks. | `{ routeKey: string, candidateId: string, reason: string }` |
+| `'optimization:rolledback'`| Emitted when a promoted candidate undergoes automatic rollback. | `{ routeKey: string, reason: string }` |
+| `'shadow:started'` | Emitted when canary shadow testing commences. | `{ routeKey: string, candidateId: string }` |
+| `'shadow:completed'` | Emitted when shadow latency evaluations conclude. | `{ routeKey: string, v1Latency: number, v2Latency: number, improvement: number }` |
+| `'error:sandbox'` | Emitted when VM sandbox execution throws runtime failures. | `{ routeKey: string, error: string }` |
+| `'error:internal'` | Emitted when interceptors or backend worker processes catch exceptions. | `{ component: string, error: string, stack?: string }` |
+
+---
+
+## 🤖 LLM Prompt Templates & Code Generation Specification
+
+When SEIM is configured with `ai.enabled: true`, the background worker calls `LLMClient.analyzeAndOptimize(...)` using the prompt specification below:
+
+### 1. Holistic Analysis System Prompt
+`You are a senior Node.js/Express performance engineer. You optimize code while strictly preserving correctness, authentication, authorization, payment logic, secrets, and business invariants. Do not introduce new external network calls or unsafe constructs.`
+
+### 2. Holistic Analysis Request Format
+```
+Analyze the following Express route handler code holistically for performance optimization opportunities.
+[Performance Metrics Context]
+
+Analyze the code for:
+1. Performance bottlenecks (async operations, inefficient loops, blocking operations)
+2. Code quality issues (redundant operations, memory leaks, unnecessary computations)
+3. Best practices violations (error handling, resource management, security issues)
+4. Architectural improvements (caching opportunities, batching, parallelization)
+
+Based on your analysis, determine if the code can be optimized and whether it would provide meaningful performance improvements given the current metrics.
+
+Respond with JSON only:
+{
+  "canOptimize": true|false,
+  "reason": "detailed explanation of your analysis and decision",
+  "pattern": "identified pattern type (e.g., 'sequential-async', 'n-plus-one', 'inefficient-loop', 'blocking-op', 'cache-miss', 'none')",
+  "optimizedCode": "if canOptimize is true, provide the optimized function body"
+}
+
+Original handler code:
+[Source Code]
+```
+
+### 3. LLM Response Formatting Guardrails
+* **JSON Extraction**: The LLM client expects a valid JSON string containing the fields. If the LLM wraps code inside Markdown blocks, SEIM extracts the bracketed content.
+* **Function Body Output**: The `optimizedCode` property must contain only the raw inner JavaScript function body, not the function signature wrapper.
+* **Correctness**: Code must not alter the external HTTP API response schema (names, keys, formatting) or validation will fail.
+
+---
+
+## ⚡ Quota & Rate Limit Fail-Safe Integration
+
+To mitigate Google Gemini API quota limits (429 Resource Exhausted) on free tier keys, `LLMClient` incorporates a **Local Simulator Fallback**:
+* **Mechanism**: If `chat()` rejects with an HTTP 429 error, `analyzeAndOptimize` catches the error, checks if the code matches common sequential async bottleneck templates (e.g., sequential delay functions), and automatically generates optimized code locally (e.g., swapping for `Promise.all`).
+* **Implementation Details**: Refer to [`src/ai.ts`](file:///home/abhishek/seim/src/ai.ts#L38-L56) for exact try-catch recovery structures.
