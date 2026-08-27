@@ -16,7 +16,17 @@ export class ShadowTestEngine {
 
   constructor() {}
 
-  public async run(routeKey: string, original: RequestHandler, optimized: RequestHandler, req: Request): Promise<ShadowRunResult> {
+  public async run(
+    routeKey: string,
+    original: RequestHandler,
+    optimized: RequestHandler,
+    req: Request,
+    allowedMethods: string[] = ['GET', 'HEAD', 'OPTIONS']
+  ): Promise<ShadowRunResult> {
+    const method = (req?.method || 'GET').toUpperCase();
+    if (!allowedMethods.map(m => m.toUpperCase()).includes(method)) {
+      throw new Error(`Shadow testing not permitted for mutating method ${method}. Gated to read-only methods: ${allowedMethods.join(', ')}`);
+    }
     const t1 = process.hrtime.bigint();
     let v1Error = false;
     let v1Output: unknown;
@@ -31,7 +41,8 @@ export class ShadowTestEngine {
     let v2Error = false;
     let v2Output: unknown;
     try {
-      v2Output = await this.promiseHandler(optimized, req);
+      const clonedReq = this.cloneRequest(req);
+      v2Output = await this.promiseHandler(optimized, clonedReq);
     } catch {
       v2Error = true;
     }
@@ -73,6 +84,21 @@ export class ShadowTestEngine {
     };
   }
 
+  private cloneRequest(req: Request): Request {
+    return {
+      method: req.method,
+      url: req.url,
+      headers: { ...req.headers },
+      params: { ...req.params },
+      query: { ...req.query },
+      body: req.body ? JSON.parse(JSON.stringify(req.body)) : undefined,
+      ip: req.ip,
+      path: req.path,
+      hostname: req.hostname,
+      protocol: req.protocol,
+    } as unknown as Request;
+  }
+
   private promiseHandler(handler: RequestHandler, req: Request): Promise<unknown> {
     return new Promise((resolve, reject) => {
       let finished = false;
@@ -84,11 +110,15 @@ export class ShadowTestEngine {
       };
       const stubRes = {
         finished: false,
+        headersSent: false,
+        writableEnded: false,
         statusCode: 200,
         json: function (body: any) { captured = body; finish(); return stubRes; },
         send: function (body: any) { captured = body; finish(); return stubRes; },
         status: function () { return stubRes; },
         setHeader: function () { return stubRes; },
+        getHeader: function () { return ''; },
+        writeHead: function () { return stubRes; },
         end: finish,
       } as unknown as Response;
       const next: NextFunction = (err?: any) => (err ? reject(err) : finish());

@@ -12,6 +12,7 @@ export interface ShadowResult {
   v2Memory: number;
   sampleSize: number;
   latencyVariance: number;
+  outputEquivalent?: boolean;
 }
 
 /**
@@ -32,6 +33,19 @@ export class TournamentSelector {
     candidate: EvolutionCandidate,
     result: ShadowResult,
   ): FitnessScore {
+    // If output is not semantically equivalent to original, candidate is invalid (zero fitness)
+    if (result.outputEquivalent === false) {
+      return {
+        overall: 0,
+        latencyScore: 0,
+        errorRateScore: 0,
+        memoryScore: 0,
+        stabilityScore: 0,
+        generation: candidate.generation,
+        lineageId: candidate.id,
+      };
+    }
+
     const weights = this.config.evolution?.fitnessWeights ?? {
       latency: 0.4,
       errorRate: 0.3,

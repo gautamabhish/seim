@@ -2,9 +2,9 @@ import * as http from 'http';
 import * as https from 'https';
 
 export async function statusCommand(args: string[]): Promise<void> {
-  const baseUrl = args[0] || 'http://localhost:3000';
-  // Default studio path
-  const statusUrl = `${baseUrl}/asdfghjklkjhgfdsasdfghj`;
+  const baseUrl = (args[0] && !args[0].startsWith('--')) ? args[0] : 'http://localhost:3000';
+  const studioPath = getArg(args, '--path') || '/seim';
+  const statusUrl = `${baseUrl.replace(/\/$/, '')}${studioPath}/api/status`;
 
   console.log(`Fetching status from ${statusUrl}...`);
 
@@ -63,4 +63,9 @@ function formatUptime(seconds: number): string {
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
   return `${h}h ${m}m ${s}s`;
+}
+
+function getArg(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }

@@ -1,25 +1,16 @@
 import { Request } from 'express';
 import { exec } from 'child_process';
-import { SeimConfig, OptimizationCandidate, ValidationReport } from './types';
+import { SeimConfig, OptimizationCandidate, ValidationReport, ValidationCheckResult } from './types';
 import { SecurityGate } from './security';
 import { LLMClient } from './ai';
-import { SchemaValidator } from './schemaValidator';
-import { SchemaRegistry } from './schemaRegistry';
-
 export class ValidationEngine {
   private security: SecurityGate;
-  private schemaValidator?: SchemaValidator;
-  private schemaRegistry?: SchemaRegistry;
 
   constructor(
     private config: SeimConfig, 
-    private llm: LLMClient,
-    schemaValidator?: SchemaValidator,
-    schemaRegistry?: SchemaRegistry
+    private llm: LLMClient
   ) {
     this.security = new SecurityGate(config);
-    this.schemaValidator = schemaValidator;
-    this.schemaRegistry = schemaRegistry;
   }
 
   public async validate(
@@ -41,15 +32,14 @@ export class ValidationEngine {
       layer7AICritic: { pass: true },
       layer8PerformanceGate: { pass: true },
       overall: false,
+      fullyValidated: false,
+      skippedChecks: [],
     };
 
     report.layer1Schema = this.schemaCheck(candidate);
     report.layer2ResponseEquivalence = this.responseEquivalence(originalResponse, optimizedResponse);
     
-    // Add schema compatibility check if validator is available
-    if (this.schemaValidator) {
-      report.layer2bSchemaCompatibility = this.schemaCompatibility(originalResponse, optimizedResponse);
-    }
+    report.layer2bSchemaCompatibility = this.schemaCompatibility(originalResponse, optimizedResponse);
     
     report.layer3BusinessRules = await this.businessRules(optimizedResponse, request);
     report.layer4UnitTests = await this.runUnitTests();
@@ -57,6 +47,21 @@ export class ValidationEngine {
     report.layer6Security = this.security.validate(candidate.originalCode, candidate);
     report.layer7AICritic = await this.aiCritic(candidate);
     report.layer8PerformanceGate = this.performanceGate(shadowResult);
+
+    // Collect skipped checks
+    const checks = [
+      { name: 'schema', result: report.layer1Schema },
+      { name: 'responseEquivalence', result: report.layer2ResponseEquivalence },
+      { name: 'schemaCompatibility', result: report.layer2bSchemaCompatibility },
+      { name: 'businessRules', result: report.layer3BusinessRules },
+      { name: 'unitTests', result: report.layer4UnitTests },
+      { name: 'integrationTests', result: report.layer5IntegrationTests },
+      { name: 'security', result: report.layer6Security },
+      { name: 'aiCritic', result: report.layer7AICritic },
+      { name: 'performanceGate', result: report.layer8PerformanceGate },
+    ];
+    report.skippedChecks = checks.filter(c => c.result.skipped).map(c => c.name);
+    report.fullyValidated = report.skippedChecks.length === 0;
 
     report.overall =
       report.layer1Schema.pass &&
@@ -69,68 +74,11 @@ export class ValidationEngine {
       report.layer7AICritic.pass &&
       report.layer8PerformanceGate.pass;
 
-    console.log('📊 [SEIM DEBUG] Validation Report:', JSON.stringify(report, null, 2));
-
     return report;
   }
 
-  /**
-   * Validate for feature evolution - uses schema compatibility instead of strict equivalence.
-   */
-  public async validateForFeatureEvolution(
-    candidate: OptimizationCandidate,
-    originalResponse: unknown,
-    optimizedResponse: unknown,
-    request?: Request,
-    shadowResult?: { v1Latency: number; v2Latency: number }
-  ): Promise<ValidationReport> {
-    const report: ValidationReport = {
-      candidateId: candidate.id,
-      layer1Schema: { pass: true },
-      layer2ResponseEquivalence: { pass: true }, // Keep for backward compatibility
-      layer2bSchemaCompatibility: { pass: true },
-      layer3BusinessRules: { pass: true, violations: [] },
-      layer4UnitTests: { pass: true },
-      layer5IntegrationTests: { pass: true },
-      layer6Security: { pass: true },
-      layer7AICritic: { pass: true },
-      layer8PerformanceGate: { pass: true },
-      overall: false,
-    };
-
-    report.layer1Schema = this.schemaCheck(candidate);
-    
-    // For feature evolution, schema compatibility is the key check
-    if (this.schemaValidator) {
-      report.layer2bSchemaCompatibility = this.schemaCompatibility(originalResponse, optimizedResponse);
-    } else {
-      // Fallback to strict equivalence if schema validator not available
-      report.layer2ResponseEquivalence = this.responseEquivalence(originalResponse, optimizedResponse);
-    }
-    
-    report.layer3BusinessRules = await this.businessRules(optimizedResponse, request);
-    report.layer4UnitTests = await this.runUnitTests();
-    report.layer5IntegrationTests = await this.runIntegrationTests();
-    report.layer6Security = this.security.validate(candidate.originalCode, candidate);
-    report.layer7AICritic = await this.aiCritic(candidate);
-    report.layer8PerformanceGate = this.performanceGate(shadowResult);
-
-    // For feature evolution, schema compatibility is required instead of strict equivalence
-    report.overall =
-      report.layer1Schema.pass &&
-      report.layer2bSchemaCompatibility.pass &&
-      report.layer3BusinessRules.pass &&
-      report.layer4UnitTests.pass &&
-      report.layer5IntegrationTests.pass &&
-      report.layer6Security.pass &&
-      report.layer7AICritic.pass &&
-      report.layer8PerformanceGate.pass;
-
-    return report;
-  }
-
-  private schemaCheck(candidate: OptimizationCandidate): { pass: boolean; reason?: string } {
-    return candidate.optimizedCode ? { pass: true } : { pass: true, reason: 'Suggestion only' };
+  private schemaCheck(candidate: OptimizationCandidate): ValidationCheckResult {
+    return { pass: true, skipped: true, reason: 'No schema validation configured' };
   }
 
   private responseEquivalence(a: unknown, b: unknown): { pass: boolean; reason?: string } {
@@ -145,27 +93,10 @@ export class ValidationEngine {
   }
 
   /**
-   * Schema compatibility check - allows safe additions, blocks breaking changes.
+   * Schema compatibility check - fallbacks to response equivalence.
    */
   private schemaCompatibility(a: unknown, b: unknown): { pass: boolean; reason?: string } {
-    if (!this.schemaValidator) {
-      // Fallback to strict equivalence if validator not available
-      return this.responseEquivalence(a, b);
-    }
-
-    const result = this.schemaValidator.validateSchemaCompatibility(a, b);
-    
-    if (!result.pass) {
-      return { 
-        pass: false, 
-        reason: `Breaking schema changes: ${result.changes
-          .filter(c => c.impact === 'breaking')
-          .map(c => c.field)
-          .join(', ')}` 
-      };
-    }
-
-    return { pass: true, reason: result.reason };
+    return this.responseEquivalence(a, b);
   }
 
   private structuralMatch(a: unknown, b: unknown, depth = 0): boolean {
@@ -215,7 +146,7 @@ export class ValidationEngine {
     return { pass: violations.length === 0, violations };
   }
 
-  private async runUnitTests(): Promise<{ pass: boolean; reason?: string }> {
+  private async runUnitTests(): Promise<ValidationCheckResult> {
     return new Promise((resolve) => {
       try {
         const child = exec('npm test', { timeout: 30_000 }, (error, stdout, stderr) => {
@@ -227,28 +158,28 @@ export class ValidationEngine {
               /missing script/i.test(stderr || '') ||
               /no test specified/i.test(stderr || stdout || '')
             ) {
-              return resolve({ pass: true, reason: 'Tests not configured' });
+              return resolve({ pass: true, skipped: true, reason: 'Tests not configured' });
             }
             return resolve({ pass: false, reason: `Unit tests failed: ${(stderr || stdout || error.message).slice(0, 200)}` });
           }
           resolve({ pass: true });
         });
         child.on('error', () => {
-          resolve({ pass: true, reason: 'Tests not configured' });
+          resolve({ pass: true, skipped: true, reason: 'Tests not configured' });
         });
       } catch {
-        resolve({ pass: true, reason: 'Tests not configured' });
+        resolve({ pass: true, skipped: true, reason: 'Tests not configured' });
       }
     });
   }
 
-  private async runIntegrationTests(): Promise<{ pass: boolean; reason?: string }> {
-    return { pass: true, reason: 'Integration tests stubbed; implement with test harness' };
+  private async runIntegrationTests(): Promise<ValidationCheckResult> {
+    return { pass: true, skipped: true, reason: 'Integration tests not implemented' };
   }
 
-  private async aiCritic(candidate: OptimizationCandidate): Promise<{ pass: boolean; reason?: string }> {
+  private async aiCritic(candidate: OptimizationCandidate): Promise<ValidationCheckResult> {
     if (!this.config.ai.enabled) {
-      return { pass: true, reason: 'AI critic disabled' };
+      return { pass: true, skipped: true, reason: 'AI critic disabled' };
     }
     try {
       const review = await this.llm.review(candidate.originalCode || '', candidate.optimizedCode || '');
@@ -258,9 +189,9 @@ export class ValidationEngine {
     }
   }
 
-  private performanceGate(shadowResult?: { v1Latency: number; v2Latency: number }): { pass: boolean; reason?: string } {
+  private performanceGate(shadowResult?: { v1Latency: number; v2Latency: number }): ValidationCheckResult {
     if (!shadowResult) {
-      return { pass: true, reason: 'No shadow result provided; skipping performance gate' };
+      return { pass: true, skipped: true, reason: 'No shadow result available' };
     }
     const { v1Latency, v2Latency } = shadowResult;
     if (v2Latency < v1Latency) {

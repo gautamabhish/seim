@@ -36,7 +36,7 @@ export class ProductionManager {
     this.stopMonitoring();
   }
 
-  public startDeployment(routeKey: string, canaryPercent: number = 5): ProductionDeployment {
+  public startDeployment(routeKey: string, canaryPercent: number = 5, baselineLatency: number = 100): ProductionDeployment {
     const deployment: ProductionDeployment = {
       routeKey,
       version: 'optimized',
@@ -45,7 +45,7 @@ export class ProductionManager {
       healthStatus: 'healthy',
       rollbackThresholds: {
         errorRate: this.config.experiment.rollbackErrorRate,
-        latencyThreshold: this.config.experiment.rollbackLatencyMs,
+        latencyThreshold: baselineLatency * (this.config.experiment.rollbackLatencyMultiplier || 1.2),
         sampleSize: this.config.experiment.shadowSampleSize,
       },
     };

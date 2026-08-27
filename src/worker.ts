@@ -53,6 +53,10 @@ export class OptimizationWorker {
     return this.queue.size;
   }
 
+  public isRunning(): boolean {
+    return this.timer !== null;
+  }
+
   private async cycle(): Promise<void> {
     if (this.running || !this.processFn || this.queue.size === 0) return;
     this.running = true;

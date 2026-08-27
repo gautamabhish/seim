@@ -1,4 +1,5 @@
 import { FrameworkAdapter, RouteHandlerInfo, OnRequestCallback, OnResponseCallback } from './types';
+import { normalizePath } from '../routeNormalizer';
 
 /**
  * Generic Node.js HTTP adapter.
@@ -58,9 +59,6 @@ export class GenericHttpAdapter implements FrameworkAdapter {
   }
 
   getRouteKey(req: any): string {
-    // Strip query string and extract pathname
-    const url = req.url || '/';
-    const qIndex = url.indexOf('?');
-    return qIndex >= 0 ? url.slice(0, qIndex) : url;
+    return normalizePath(req.url || '/');
   }
 }

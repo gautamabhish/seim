@@ -6,3 +6,4 @@ export { OptimizationPropagator } from './propagator';
 export { PatternExtractor } from './patternExtractor';
 export { LearnedPatternRegistry, LearnedPattern } from './learnedPatterns';
 export { DriftDetector } from './driftDetector';
+export { EvolutionPipeline, EvolutionOpportunity, PipelineExecutionResult } from './pipeline';

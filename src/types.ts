@@ -1,9 +1,28 @@
-import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { LogLevel } from './logger';
 
 export type SeimMode = 'restrict' | 'bypass';
 
-export type BusinessRule<T = unknown> = (response: T, request?: Request) => boolean | Promise<boolean>;
+export interface GenericRequest {
+  method: string;
+  url: string;
+  headers: Record<string, any>;
+  query?: any;
+  params?: any;
+  body?: any;
+  ip?: string;
+  [key: string]: any;
+}
+
+export interface GenericResponse {
+  json: (body: any) => any;
+  send: (body: any) => any;
+  status: (code: number) => any;
+  end: () => void;
+  setHeader?: (name: string, value: any) => any;
+  [key: string]: any;
+}
+
+export type BusinessRule<T = unknown> = (response: T, request?: GenericRequest) => boolean | Promise<boolean>;
 
 export type SecurityRule = (oldCode: string, newCode: string) => { pass: boolean; reason?: string };
 
@@ -35,17 +54,6 @@ export interface SeimConfig {
     };
     requireIsolatedVm?: boolean;
   };
-  build?: {
-    enabled: boolean;
-    buildCommand: string;
-    outputDir: string;
-    sourceDir: string;
-    typescript: boolean;
-    minify: boolean;
-    sourcemap: boolean;
-    autoBuild: boolean;
-    buildTimeout: number;
-  };
   ai: {
     generatorModel: string;
     reviewerModel: string;
@@ -60,7 +68,7 @@ export interface SeimConfig {
   experiment: {
     confidenceThreshold: number;
     canaryPercent: number;
-    rollbackLatencyMs: number;
+    rollbackLatencyMultiplier: number;
     rollbackErrorRate: number;
     minSampleSize: number;
     shadowCooldownMs: number;
@@ -100,47 +108,45 @@ export interface SeimConfig {
     rateLimit?: boolean;
   };
   evolution?: Partial<EvolutionConfig>;
-  schemaEvolution?: {
-    mode: 'strict' | 'compatible' | 'permissive';
-    allowBreakingChanges: boolean;
-    requireApiVersioning: boolean;
-    notifyOnSchemaChange: boolean;
-    allowedAdditions: string[];
-  };
-  businessMetrics?: {
+  scaffolding?: {
     enabled: boolean;
-    kpis: string[];
-    analyticsProvider?: 'mixpanel' | 'amplitude' | 'ga' | 'custom';
-    apiKey?: string;
-    dataSource?: 'custom' | 'analytics' | 'database';
+    maxDynamicRoutes?: number;
   };
-  featureEvolution?: {
-    enabled: boolean;
-    aiProvider?: 'openai' | 'anthropic' | 'custom';
-    behaviorDataSource?: 'analytics' | 'database' | 'custom';
-    abTestSampleSize: number;
-    abTestDuration: number;
-    statisticalSignificance: number;
-    autoABTest?: boolean;
+  /** Whether SEIM can autonomously promote candidates to production. Default: false (requires manual approval). */
+  autonomousPromotion?: boolean;
+
+  /** Behavior-driven feature discovery configuration */
+  behavior?: {
+    /** Enable visitor behavior tracking. Default: false */
+    enabled?: boolean;
+    /** Minimum times a pattern must appear before triggering feature discovery */
+    minPatternFrequency?: number;
+    /** Maximum behavior events to keep in memory */
+    maxEvents?: number;
+    /** Whether to autonomously scaffold discovered features. Default: false */
+    autoScaffold?: boolean;
+    /** Paths to exclude from behavior tracking (e.g., health checks) */
+    excludePaths?: string[];
   };
-  frontendEvolution?: {
-    enabled: boolean;
-    framework: 'react' | 'vue' | 'angular' | 'vanilla';
-    codeValidation: 'strict' | 'moderate' | 'permissive';
-    requireCodeSigning: boolean;
-    sandboxExecution: boolean;
-    componentCacheDuration: number;
-    allowedDependencies: string[];
-    autoGenerate?: boolean;
-    autoDeploy?: boolean;
+
+  /** Frontend React component generation configuration */
+  frontend?: {
+    /** Enable React component generation. Default: false */
+    enabled?: boolean;
+    /** Path where generated components should be written on disk */
+    outputDir?: string;
+    /** Write generated component code to disk. Default: false */
+    writeToDisk?: boolean;
+    /** Framework target */
+    framework?: 'react' | 'next' | 'vite';
+    /** Whether to use TypeScript in generated components. Default: true */
+    typescript?: boolean;
   };
-  featureFlags?: {
-    enabled: boolean;
-    storage?: 'memory' | 'redis' | 'database';
-    emergencyKillSwitch: boolean;
-    autoCreateFlags?: boolean;
-    autoRollout?: boolean;
-    rolloutDuration?: number;
+
+  /** Custom optimization pattern templates registered by the developer */
+  patterns?: {
+    /** Whether to run custom patterns in addition to built-in ones. Default: true */
+    enabled?: boolean;
   };
 }
 
@@ -186,18 +192,28 @@ export interface MetricsSnapshot {
   generatedAt: number;
 }
 
+export interface ValidationCheckResult {
+  pass: boolean;
+  skipped?: boolean;
+  reason?: string;
+}
+
 export interface ValidationReport {
   candidateId: string;
-  layer1Schema: { pass: boolean; reason?: string };
-  layer2ResponseEquivalence: { pass: boolean; reason?: string };
-  layer2bSchemaCompatibility: { pass: boolean; reason?: string };
-  layer3BusinessRules: { pass: boolean; violations: string[] };
-  layer4UnitTests: { pass: boolean; reason?: string };
-  layer5IntegrationTests: { pass: boolean; reason?: string };
-  layer6Security: { pass: boolean; reason?: string };
-  layer7AICritic: { pass: boolean; reason?: string };
-  layer8PerformanceGate: { pass: boolean; reason?: string };
+  layer1Schema: ValidationCheckResult;
+  layer2ResponseEquivalence: ValidationCheckResult;
+  layer2bSchemaCompatibility: ValidationCheckResult;
+  layer3BusinessRules: ValidationCheckResult & { violations: string[] };
+  layer4UnitTests: ValidationCheckResult;
+  layer5IntegrationTests: ValidationCheckResult;
+  layer6Security: ValidationCheckResult;
+  layer7AICritic: ValidationCheckResult;
+  layer8PerformanceGate: ValidationCheckResult;
   overall: boolean;
+  /** True only if all checks actually ran (none were skipped) */
+  fullyValidated: boolean;
+  /** Summary of skipped checks */
+  skippedChecks: string[];
 }
 
 export interface ExperimentReport {
@@ -227,6 +243,13 @@ export interface SeimStatus {
   workerQueueSize: number;
   lastOptimizationAt?: number;
   healthy: boolean;
+  /** Component-level health for diagnostics */
+  components?: {
+    worker: boolean;
+    storage: boolean;
+    ai: boolean;
+    evolution: boolean;
+  };
 }
 
 export interface MetricsStore {
@@ -237,24 +260,55 @@ export interface MetricsStore {
 }
 
 export interface SeimInstance {
-  listener: () => any;
-  plugin?: () => any;
-  dashboard: any;
+  listener: () => any; // Keep returning framework-specific middleware handler (e.g. Express RequestHandler)
+  plugin?: () => any;   // Keep returning Fastify plugin function
+  dashboard: any;       // Studio router/handler
   status(): SeimStatus;
   shutdown(): Promise<void>;
   on(event: string, listener: (...args: any[]) => void): void;
+  registerVariant?: (routePattern: string, variant: any) => void;
+  activateVariant?: (routePattern: string, variantName: string) => boolean;
+
+  /** Behavior tracking analytics snapshot */
+  behaviors?: any;
+
+  /**
+   * Generate a React component from a description.
+   * Only available when config.frontend.enabled = true.
+   */
+  generateComponent?: (request: {
+    name: string;
+    routePath?: string;
+    intent: string;
+    dataEndpoints?: string[];
+    isPage?: boolean;
+  }) => Promise<{ code: string; componentId: string }>;
+
+  /**
+   * Custom optimization pattern templates.
+   * Register your own patterns like: seim.patterns.registerRegex(...)
+   */
+  patterns?: any;
+
   config: Readonly<SeimConfig>;
   metrics: MetricsStore;
   endpointTracker?: any;
   productionManager?: any;
   dynamicRouter?: any;
   versionManager?: any;
-  businessMetrics?: any;
-  behaviorAnalysis?: any;
-  buildService?: any;
+  dispatcher?: any;
+  versionRegistry?: any;
+  variantRegistry?: any;
+  candidateStore?: any;
+  artifactStore?: any;
+  pipeline?: any;
+  behaviorTracker?: any;
+  featureDiscovery?: any;
+  reactRegistry?: any;
+  reactGenerator?: any;
 }
 
-export type RequestListener = (req: Request, res: Response, next: NextFunction) => void;
+export type RequestListener = (req: GenericRequest, res: GenericResponse, next: () => void) => void;
 
 export interface OptimizationMemory {
   problem: string;
@@ -331,167 +385,4 @@ export interface OptimizationExplanation {
   lineage: string[];
   relatedOptimizations: string[];
   timestamp: number;
-}
-
-// Feature Evolution Types
-export interface FeatureOpportunity {
-  id: string;
-  type: 'personalization' | 'recommendation' | 'pricing' | 'content';
-  description: string;
-  expectedImpact: number;
-  confidence: number;
-}
-
-export interface FeatureVariant {
-  id: string;
-  code: string;
-  strategy: string;
-  metadata: Record<string, any>;
-}
-
-export interface UserBehaviorData {
-  userId: string;
-  actions: UserAction[];
-  segments: string[];
-  kpis: Record<string, number>;
-}
-
-export interface UserAction {
-  action: string;
-  timestamp: number;
-  properties: Record<string, any>;
-}
-
-// Frontend Evolution Types
-export interface ComponentUpdate {
-  componentId: string;
-  code: string;
-  version: string;
-  dependencies: string[];
-  framework: string;
-  checksum: string;
-}
-
-export interface BackendChange {
-  field: string;
-  type: 'added' | 'removed' | 'modified';
-  description: string;
-}
-
-export interface ComponentVersion {
-  id: string;
-  version: string;
-  code: string;
-  dependencies: string[];
-  createdAt: number;
-  checksum: string;
-}
-
-// A/B Testing Types
-export interface ABTest {
-  id: string;
-  featureId: string;
-  variants: FeatureVariant[];
-  status: 'created' | 'running' | 'completed' | 'stopped';
-  startedAt: number;
-  endedAt?: number;
-  config: ABTestConfig;
-}
-
-export interface ABTestConfig {
-  featureId: string;
-  sampleSize: number;
-  duration: number;
-  trafficSplit: Record<string, number>;
-  successMetrics: string[];
-}
-
-export interface StatisticalResult {
-  significant: boolean;
-  confidence: number;
-  winner?: string;
-  pValue: number;
-}
-
-export interface TestResult {
-  winner: string;
-  confidence: number;
-  improvement: number;
-  recommendations: string[];
-}
-
-// Schema Evolution Types
-export interface SchemaChange {
-  id: string;
-  routeKey: string;
-  oldVersion: string;
-  newVersion: string;
-  type: 'backward_compatible' | 'breaking';
-  description: string;
-  changedFields: string[];
-  timestamp: number;
-}
-
-export interface SchemaVersion {
-  version: string;
-  routeKey: string;
-  schema: any;
-  createdAt: number;
-}
-
-// Frontend Evolution Types
-export interface FrontendComponent {
-  id: string;
-  routeKey: string;
-  framework: string;
-  code: string;
-  schemaVersion: string;
-  generatedAt: number;
-  status: 'pending' | 'approved' | 'rejected' | 'deployed' | 'active' | 'rollback_available';
-  approvedAt?: number;
-  rejectedAt?: number;
-  deployedAt?: number;
-  metadata: {
-    changeId?: string;
-    reviewPassed?: boolean;
-    reviewReason?: string;
-    rejectionReason?: string;
-  };
-}
-
-// Feature Flags Types
-export interface FeatureFlag {
-  id: string;
-  key: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  rolloutPercentage: number;
-  targetSegments: string[];
-  targetType: 'all' | 'segment' | 'user' | 'none';
-  conditions: any[];
-  metadata: Record<string, any>;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface FlagEvaluationContext {
-  userId: string;
-  segments?: string[];
-  attributes?: Record<string, any>;
-  timestamp?: number;
-}
-
-export interface StatisticalResult {
-  significant: boolean;
-  confidence: number;
-  winner?: string;
-  pValue: number;
-}
-
-export interface TestResult {
-  winner: string;
-  confidence: number;
-  improvement: number;
-  recommendations: string[];
 }

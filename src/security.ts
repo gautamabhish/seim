@@ -48,17 +48,32 @@ export class SecurityGate {
    * Compute the diff between old and new code — returns only changed lines.
    */
   private computeDiff(oldCode: string, newCode: string): { added: string[]; removed: string[] } {
-    const oldLines = new Set(oldCode.split('\n').map(l => l.trim()).filter(Boolean));
-    const newLines = new Set(newCode.split('\n').map(l => l.trim()).filter(Boolean));
+    const oldLines = oldCode.split('\n').map(l => l.trim()).filter(Boolean);
+    const newLines = newCode.split('\n').map(l => l.trim()).filter(Boolean);
 
     const added: string[] = [];
     const removed: string[] = [];
 
-    for (const line of newLines) {
-      if (!oldLines.has(line)) added.push(line);
-    }
+    const oldCounts = new Map<string, number>();
     for (const line of oldLines) {
-      if (!newLines.has(line)) removed.push(line);
+      oldCounts.set(line, (oldCounts.get(line) || 0) + 1);
+    }
+    const newCounts = new Map<string, number>();
+    for (const line of newLines) {
+      newCounts.set(line, (newCounts.get(line) || 0) + 1);
+    }
+
+    for (const [line, count] of newCounts.entries()) {
+      const oldCount = oldCounts.get(line) || 0;
+      if (count > oldCount) {
+        for (let i = 0; i < count - oldCount; i++) added.push(line);
+      }
+    }
+    for (const [line, count] of oldCounts.entries()) {
+      const newCount = newCounts.get(line) || 0;
+      if (count > newCount) {
+        for (let i = 0; i < count - newCount; i++) removed.push(line);
+      }
     }
 
     return { added, removed };
@@ -66,16 +81,20 @@ export class SecurityGate {
 
   /**
    * Check if the diff (changed lines only) touches any sensitive keywords.
-   * This dramatically reduces false positives vs checking the entire code.
+   * Uses word boundary regexes to prevent false positives (e.g., 'author' matching 'auth').
    */
   private diffTouches(diff: { added: string[]; removed: string[] }, keywords: string[]): boolean {
-    const changedText = [...diff.added, ...diff.removed].join('\n').toLowerCase();
+    const changedText = [...diff.added, ...diff.removed].join('\n');
     // Skip comment-only matches
     const nonCommentLines = changedText.split('\n').filter(l => {
       const trimmed = l.trim();
       return !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*');
     }).join('\n');
-    return keywords.some(k => nonCommentLines.includes(k.toLowerCase()));
+
+    return keywords.some(k => {
+      const regex = new RegExp(`\\b${k}\\b`, 'i');
+      return regex.test(nonCommentLines);
+    });
   }
 
   /**
@@ -107,13 +126,21 @@ export class SecurityGate {
       return { pass: false, reason: `Optimization removed ${oldValidation - newValidation} input validation check(s)` };
     }
 
+    // Block dangerous global functions or prototypes that could bypass sandbox / cause vulnerability
+    const dangerousPattern = /\beval\s*\(|\bFunction\s*\(|new\s+Function\b|\bProxy\b|\bReflect\b/g;
+    if (dangerousPattern.test(newCode)) {
+      return { pass: false, reason: 'Optimization introduces dangerous global API (eval, Function, Proxy, or Reflect)' };
+    }
+
     return { pass: true };
   }
 
   private introducesSecret(code: string): boolean {
     const suspicious = /process\.env\.[A-Z_]*(?:SECRET|KEY|PASSWORD|TOKEN)/i;
-    const hasSuspicious = suspicious.test(code);
-    const hasHardcoded = /(?:password|secret|token)\s*[:=]\s*['"`][^'"`]+['"`]/i.test(code);
+    const bracketSuspicious = /process\s*\.\s*env\s*\[\s*['"`][A-Z_]*(?:SECRET|KEY|PASSWORD|TOKEN)/i;
+    const destructuringSuspicious = /\{\s*[^}]*(?:SECRET|KEY|PASSWORD|TOKEN)[^}]*\}\s*=\s*process\.env/i;
+    const hasSuspicious = suspicious.test(code) || bracketSuspicious.test(code) || destructuringSuspicious.test(code);
+    const hasHardcoded = /(?:password|secret|token|api_key|apiKey)\s*[:=]\s*['"`][^'"`]{8,}['"`]/i.test(code);
     return hasSuspicious || hasHardcoded;
   }
 }

@@ -2,9 +2,17 @@ import { OptimizationCandidate, SeimConfig, RouteMetrics } from './types';
 import { LLMClient } from './ai';
 import { EndpointTracker } from './endpointTracker';
 import { LearningMemoryStore, LearningContext } from './learning';
+import { CustomPatternRegistry } from './customPatternRegistry';
 
 export class OptimizationEngine {
-  constructor(private config: SeimConfig, private llm: LLMClient) {}
+  private customPatterns?: CustomPatternRegistry;
+
+  constructor(private config: SeimConfig, public llm: LLMClient) {}
+
+  /** Attach the custom pattern registry so it runs alongside built-in patterns */
+  public setCustomPatternRegistry(registry: CustomPatternRegistry): void {
+    this.customPatterns = registry;
+  }
 
   public async analyze(routeKey: string, sourceCode: string): Promise<OptimizationCandidate[]> {
     // Legacy method for backward compatibility - uses pattern-based approach
@@ -116,6 +124,39 @@ export class OptimizationEngine {
         candidates.push(candidate);
       }
     }
+
+    // Run developer-registered custom patterns (Feature 3)
+    if (this.customPatterns && this.config.patterns?.enabled !== false) {
+      const customMatches = this.customPatterns.scan(sourceCode);
+      for (const { pattern: cp } of customMatches) {
+        if (seen.has(cp.id)) continue;
+        seen.add(cp.id);
+
+        // Apply fixer if available
+        let optimizedCode: string | undefined;
+        if (cp.fixer) {
+          optimizedCode = cp.fixer.fix(sourceCode) ?? undefined;
+        } else if (cp.useAI && this.config.ai.enabled) {
+          optimizedCode = (await this.llm.optimize(sourceCode, cp.description)) ?? undefined;
+        }
+
+        if (!optimizedCode && this.config.mode === 'bypass') continue;
+
+        candidates.push({
+          id: `${routeKey}::custom::${cp.id}::${Date.now()}`,
+          routeKey,
+          pattern: cp.id,
+          severity: cp.severity,
+          originalCode: sourceCode,
+          optimizedCode,
+          confidence: 0.85,
+          status: 'pending',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    }
+
     return candidates;
   }
 

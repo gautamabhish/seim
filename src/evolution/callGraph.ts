@@ -18,6 +18,17 @@ export class CallGraph {
     'setImmediate', 'clearImmediate', 'parseInt', 'parseFloat',
     'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
     'require', 'structuredClone', 'fetch', 'res', 'req', 'next',
+    // Standard Array / Object / String methods
+    'map', 'filter', 'reduce', 'forEach', 'find', 'findIndex', 'includes',
+    'some', 'every', 'slice', 'splice', 'push', 'pop', 'shift', 'unshift',
+    'concat', 'join', 'split', 'replace', 'replaceAll', 'trim', 'toLowerCase',
+    'toUpperCase', 'startsWith', 'endsWith', 'substring', 'indexOf', 'lastIndexOf',
+    'keys', 'values', 'entries', 'assign', 'freeze', 'stringify', 'parse',
+    'then', 'catch', 'finally', 'resolve', 'reject', 'all', 'race', 'allSettled',
+    // Express / HTTP helper methods
+    'send', 'json', 'status', 'sendStatus', 'setHeader', 'getHeader', 'writeHead',
+    'end', 'redirect', 'render', 'cookie', 'clearCookie', 'type', 'format',
+    'attachment', 'download', 'links', 'location', 'vary', 'append',
   ]);
 
   /**

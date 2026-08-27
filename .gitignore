@@ -6,4 +6,7 @@ dist/
 .seim/
 coverage/
 scratch/
+.seim-storage/
+.seim-ci/
+.seim-test-*/
 demo-app/.seim-storage/

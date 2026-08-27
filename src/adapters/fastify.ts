@@ -1,4 +1,5 @@
 import { FrameworkAdapter, RouteHandlerInfo, OnRequestCallback, OnResponseCallback } from './types';
+import { normalizePath } from '../routeNormalizer';
 
 /**
  * Fastify adapter.
@@ -72,7 +73,8 @@ export class FastifyAdapter implements FrameworkAdapter {
   }
 
   getRouteKey(req: any): string {
-    // Fastify exposes the route schema
-    return req.routeOptions?.url || req.routerPath || req.url || '/';
+    const route = req.routeOptions?.url || req.routerPath;
+    if (route) return route;
+    return normalizePath(req.url || '/');
   }
 }

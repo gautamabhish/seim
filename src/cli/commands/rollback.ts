@@ -2,15 +2,15 @@ import * as http from 'http';
 import * as https from 'https';
 
 export async function rollbackCommand(args: string[]): Promise<void> {
-  const route = args[0];
+  const route = (args[0] && !args[0].startsWith('--')) ? args[0] : undefined;
   if (!route) {
-    console.error('Usage: seim rollback <route> [--url baseUrl]');
+    console.error('Usage: seim rollback <route> [--url baseUrl] [--path studioPath]');
     process.exit(1);
   }
 
   const baseUrl = getArg(args, '--url') || 'http://localhost:3000';
-  const studioPath = '/asdfghjklkjhgfdsasdfghj';
-  const rollbackUrl = `${baseUrl}${studioPath}`;
+  const studioPath = getArg(args, '--path') || '/seim';
+  const rollbackUrl = `${baseUrl.replace(/\/$/, '')}${studioPath}/api/rollback`;
 
   console.log(`Requesting rollback for route: ${route}`);
   console.log(`Sending to: ${rollbackUrl}`);
