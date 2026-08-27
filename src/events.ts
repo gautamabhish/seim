@@ -40,6 +40,7 @@ export interface SeimEvents {
   'featureflag:updated': { flagId: string; updates: any };
   'featureflag:deleted': { flagId: string };
   'featureflag:rollout_completed': { flagId: string; targetPercentage: number };
+  'frontend:telemetry_received': { path: string; issues: any[] };
 }
 
 export type SeimEventName = keyof SeimEvents;

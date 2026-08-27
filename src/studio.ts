@@ -3,12 +3,55 @@ import { SeimInstance } from './types';
 
 export function createStudioHandler(instance: SeimInstance): RequestHandler {
   return (req: Request, res: Response): void => {
-    if (req.path.endsWith('/api/status')) {
-      res.json({ ok: true, status: instance.status() });
+    const p = req.path || req.url || '';
+    if (p.endsWith('/api/status') || p.endsWith('/status')) {
+      const statusData = instance && typeof instance.status === 'function' ? instance.status() : {};
+      res.json({ ok: true, status: statusData, ...statusData });
       return;
     }
-    if (req.path.endsWith('/api/metrics')) {
-      res.json(instance.metrics.snapshot());
+    if (p.endsWith('/api/metrics') || p.endsWith('/metrics')) {
+      res.json(instance?.metrics ? instance.metrics.snapshot() : {});
+      return;
+    }
+    if (p.endsWith('/api/candidates')) {
+      const candidates = instance?.candidateStore ? instance.candidateStore.listAll ? instance.candidateStore.listAll() : [] : [];
+      res.json(candidates);
+      return;
+    }
+    if (p.endsWith('/api/behavior')) {
+      const snapshot = instance?.behaviorTracker ? instance.behaviorTracker.snapshot() : {};
+      const components = instance?.reactRegistry ? instance.reactRegistry.listAll() : [];
+      res.json({ ...snapshot, components });
+      return;
+    }
+    if (p.endsWith('/api/rollback') || p.endsWith('/rollback')) {
+      if (req.method === 'POST') {
+        const body = req.body || {};
+        const routeKey = body.routeKey || body.route;
+        const reason = body.reason || 'Manual rollback via CLI/API';
+        if (!routeKey) {
+          res.status(400).json({ success: false, error: 'routeKey is required' });
+          return;
+        }
+        let success = false;
+        if (instance?.dispatcher) {
+          success = instance.dispatcher.rollback(routeKey, reason);
+        } else if (instance?.dynamicRouter) {
+          instance.dynamicRouter.swapHandler(routeKey, null as any, 'optimized');
+          success = true;
+        }
+        res.json({ success, routeKey, message: success ? 'Rollback successful' : 'Route not found or rollback failed' });
+        return;
+      }
+    }
+    if (p.endsWith('/api/promote') && req.method === 'POST') {
+      const body = req.body || {};
+      const routeKey = body.routeKey || body.route;
+      let success = false;
+      if (instance?.dispatcher && routeKey) {
+        success = instance.dispatcher.promote(routeKey);
+      }
+      res.json({ success, routeKey, message: success ? 'Candidate promoted to production' : 'Promotion failed' });
       return;
     }
     res.setHeader('Content-Type', 'text/html');
@@ -308,7 +351,8 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
     <!-- Navigation Tabs -->
     <div class="nav-tabs">
       <button class="tab-btn active" onclick="switchTab('overview')">📊 Route Telemetry</button>
-      <button class="tab-btn" onclick="switchTab('optimizations')">⚡ Autonomous Intelligence</button>
+      <button class="tab-btn" onclick="switchTab('optimizations')">🧬 Candidates & Diffs</button>
+      <button class="tab-btn" onclick="switchTab('behavior')">🧠 Visitor Behavior & React</button>
       <button class="tab-btn" onclick="switchTab('developer')">🛠️ Raw JSON State</button>
     </div>
 
@@ -323,11 +367,12 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
               <th>Avg Latency</th>
               <th>Active Version</th>
               <th>Status</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="routes-tbody">
             <tr>
-              <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+              <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">
                 Listening for incoming requests...
               </td>
             </tr>
@@ -336,29 +381,67 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
       </div>
     </div>
 
-    <!-- Tab 2: Autonomous Intelligence -->
+    <!-- Tab 2: Candidate Diffs -->
     <div id="tab-optimizations" class="tab-content">
-      <div id="optimizations-list">
+      <div id="candidates-container">
         <div class="explain-card">
           <div class="explain-header">
-            <strong style="color: var(--accent-blue);">Auto-Optimizer Engine</strong>
-            <span class="badge badge-green">Worker Queue: Clean</span>
+            <strong style="color: var(--accent-blue);">Evolution & Sandboxed Candidates</strong>
+            <span class="badge badge-green" id="candidate-count-badge">0 Candidates</span>
           </div>
-          <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.5;">
-            SEIM continuously scans route code for bottlenecks (such as unindexed array lookups, sequential async calls, missing caches, and heavy JSON serialization). When detected, safe optimizations are validated in a sandbox before live promotion.
+          <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1rem;">
+            SEIM continuously scans route code for optimization opportunities (e.g., N+1 queries, unindexed finds, sequential async calls, and missing caches). Inspect diffs and control promotions below.
           </p>
+          <div id="candidates-list" style="display: grid; gap: 1rem;">
+            <div style="color: var(--text-muted); font-size: 0.85rem;">No active evolution candidates in storage.</div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Tab 3: Developer JSON -->
+    <!-- Tab 3: Visitor Behavior & React -->
+    <div id="tab-behavior" class="tab-content">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <div class="card">
+          <div class="card-title">Discovered Feature Opportunities (404s & Hot Paths)</div>
+          <div id="behavior-patterns" style="margin-top: 1rem; display: grid; gap: 0.75rem; font-size: 0.85rem;">
+            <div style="color: var(--text-muted);">Tracking user journeys...</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Scaffolded React Frontend Components</div>
+          <div id="react-components-list" style="margin-top: 1rem; display: grid; gap: 0.75rem; font-size: 0.85rem;">
+            <div style="color: var(--text-muted);">No autonomous frontend components scaffolded yet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 4: Developer JSON -->
     <div id="tab-developer" class="tab-content">
       <pre id="json-viewer">Loading state...</pre>
     </div>
   </main>
 
+  <!-- Diff Viewer Modal -->
+  <div id="diff-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 100; align-items: center; justify-content: center; padding: 2rem;">
+    <div style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 0.75rem; width: 100%; max-width: 900px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;">
+      <div style="padding: 1rem 1.5rem; border-bottom: 1px solid var(--card-border); display: flex; justify-content: space-between; align-items: center;">
+        <h3 id="diff-modal-title" style="font-size: 1.1rem; color: var(--accent-blue); font-weight: 600;">Candidate Code Diff</h3>
+        <button onclick="closeDiffModal()" style="background: transparent; border: none; color: var(--text-muted); font-size: 1.25rem; cursor: pointer;">&times;</button>
+      </div>
+      <div id="diff-modal-body" style="padding: 1.5rem; overflow-y: auto; flex: 1;">
+        <pre id="diff-code-view" style="color: #10b981; white-space: pre-wrap; font-size: 0.85rem;"></pre>
+      </div>
+      <div style="padding: 1rem 1.5rem; border-top: 1px solid var(--card-border); display: flex; justify-content: flex-end; gap: 0.75rem;">
+        <button onclick="closeDiffModal()" style="padding: 0.5rem 1rem; background: var(--card-border); border: none; border-radius: 0.375rem; color: var(--text-main); cursor: pointer;">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const studioPath = "${instance.config.studioPath}";
+    const studioPath = "${instance.config.studioPath || '/seim'}";
+    let currentCandidates = [];
 
     function switchTab(tabName) {
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -368,20 +451,65 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
       document.getElementById('tab-' + tabName).classList.add('active');
     }
 
+    function openDiffModal(title, code) {
+      document.getElementById('diff-modal-title').textContent = title;
+      document.getElementById('diff-code-view').textContent = code;
+      document.getElementById('diff-modal').style.display = 'flex';
+    }
+
+    function closeDiffModal() {
+      document.getElementById('diff-modal').style.display = 'none';
+    }
+
+    async function triggerRollback(routeKey) {
+      if (!confirm('Are you sure you want to rollback ' + routeKey + ' to original handler?')) return;
+      try {
+        const res = await fetch(studioPath + '/api/rollback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ routeKey, reason: 'Manual studio action' })
+        }).then(r => r.json());
+        alert(res.message || (res.success ? 'Rollback completed!' : 'Rollback failed'));
+        updateDashboard();
+      } catch (err) {
+        alert('Rollback error: ' + err.message);
+      }
+    }
+
+    async function triggerPromote(routeKey) {
+      if (!confirm('Promote candidate for ' + routeKey + ' to 100% production traffic?')) return;
+      try {
+        const res = await fetch(studioPath + '/api/promote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ routeKey })
+        }).then(r => r.json());
+        alert(res.message || (res.success ? 'Candidate promoted!' : 'Promotion failed'));
+        updateDashboard();
+      } catch (err) {
+        alert('Promote error: ' + err.message);
+      }
+    }
+
     async function updateDashboard() {
       try {
-        const [statusRes, metricsRes] = await Promise.all([
-          fetch(studioPath + '/api/status').then(r => r.json()),
-          fetch(studioPath + '/api/metrics').then(r => r.json())
+        const [statusRes, metricsRes, candidatesRes, behaviorRes] = await Promise.all([
+          fetch(studioPath + '/api/status').then(r => r.json()).catch(() => ({})),
+          fetch(studioPath + '/api/metrics').then(r => r.json()).catch(() => ({})),
+          fetch(studioPath + '/api/candidates').then(r => r.json()).catch(() => ([])),
+          fetch(studioPath + '/api/behavior').then(r => r.json()).catch(() => ({}))
         ]);
 
-        const status = statusRes.status || {};
+        const status = statusRes.status || statusRes || {};
         const metrics = metricsRes || {};
+        currentCandidates = candidatesRes || [];
+        const behavior = behaviorRes || {};
 
         // Update stats
         document.getElementById('val-opts').textContent = status.totalOptimizationsGenerated || 0;
         document.getElementById('val-versions').textContent = status.totalOptimizationsPromoted || 0;
         document.getElementById('val-rollbacks').textContent = status.totalRollbacks || 0;
+        document.getElementById('candidate-count-badge').textContent = currentCandidates.length + ' Candidates';
 
         // Render Routes Table
         const tbody = document.getElementById('routes-tbody');
@@ -390,7 +518,7 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
         if (routes.length === 0) {
           tbody.innerHTML = \`
             <tr>
-              <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+              <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">
                 No traffic detected yet. Send HTTP requests to your application to see live evolution metrics.
               </td>
             </tr>
@@ -408,14 +536,53 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
                 <td>\${r.requestCount || 0} reqs</td>
                 <td>\${avg} ms</td>
                 <td><span class="badge \${isPromoted ? 'badge-purple' : 'badge-blue'}">\${isPromoted ? 'Evolved v2' : 'Original v1'}</span></td>
-                <td><span class="badge badge-green">🟢 Monitored</span></td>
+                <td><span class="badge badge-green">🟢 Active</span></td>
+                <td>
+                  <button onclick="triggerPromote('\${routeKey}')" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: rgba(168, 85, 247, 0.2); border: 1px solid var(--accent-purple); color: var(--accent-purple); border-radius: 0.25rem; cursor: pointer; margin-right: 0.4rem;">Promote</button>
+                  <button onclick="triggerRollback('\${routeKey}')" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: rgba(244, 63, 94, 0.2); border: 1px solid var(--accent-rose); color: var(--accent-rose); border-radius: 0.25rem; cursor: pointer;">Rollback</button>
+                </td>
               </tr>
             \`;
           }).join('');
         }
 
+        // Render Behavior & React
+        const patternsContainer = document.getElementById('behavior-patterns');
+        const patterns = behavior.patterns || [];
+        if (patterns.length === 0) {
+          patternsContainer.innerHTML = '<div style="color: var(--text-muted);">No anomalous visitor patterns detected yet (minimum threshold not reached).</div>';
+        } else {
+          patternsContainer.innerHTML = patterns.map(p => \`
+            <div style="padding: 0.75rem; background: var(--bg-dark); border-radius: 0.375rem; border: 1px solid var(--card-border);">
+              <div style="display: flex; justify-content: space-between; font-weight: 600; color: var(--accent-amber);">
+                <span>Type: \${p.type}</span>
+                <span>Hits: \${p.frequency}</span>
+              </div>
+              <div style="margin-top: 0.25rem; color: var(--text-main);">Path: <code>\${p.path}</code></div>
+              <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 0.25rem;">Affected Sessions: \${p.affectedSessions}</div>
+            </div>
+          \`).join('');
+        }
+
+        const reactContainer = document.getElementById('react-components-list');
+        const components = behavior.components || [];
+        if (components.length === 0) {
+          reactContainer.innerHTML = '<div style="color: var(--text-muted);">No React frontend components scaffolded yet.</div>';
+        } else {
+          reactContainer.innerHTML = components.map(c => \`
+            <div style="padding: 0.75rem; background: var(--bg-dark); border-radius: 0.375rem; border: 1px solid var(--card-border);">
+              <div style="display: flex; justify-content: space-between; font-weight: 600; color: var(--accent-blue);">
+                <span>\${c.name}</span>
+                <span class="badge badge-purple">v\${c.version}</span>
+              </div>
+              <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 0.25rem;">Route: \${c.routePath || 'Component only'}</div>
+              <button onclick="openDiffModal('React Component: \${c.name}', decodeURIComponent('\${encodeURIComponent(c.code)}'))" style="margin-top: 0.5rem; padding: 0.2rem 0.5rem; font-size: 0.75rem; background: var(--card-border); border: none; color: var(--text-main); border-radius: 0.25rem; cursor: pointer;">View TSX Source</button>
+            </div>
+          \`).join('');
+        }
+
         // Render Raw JSON
-        document.getElementById('json-viewer').textContent = JSON.stringify({ status, metrics }, null, 2);
+        document.getElementById('json-viewer').textContent = JSON.stringify({ status, metrics, behavior }, null, 2);
 
       } catch (err) {
         console.error('Failed to update dashboard', err);

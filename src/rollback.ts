@@ -31,7 +31,7 @@ export class RollbackEngine {
     });
   }
 
-  public evaluate(routeKey: string, report: ExperimentReport): 'promote' | 'rollback' | 'continue' {
+  public evaluate(routeKey: string, report: ExperimentReport): 'promote' | 'rollback' | 'continue' | 'manual-review' {
     const v = this.activeVersions.get(routeKey);
     if (!v) return 'continue';
 
@@ -39,16 +39,25 @@ export class RollbackEngine {
     v.reports.push(report);
     this.lastReport.set(routeKey, report);
 
-    if (report.v2Errors > report.v1Errors * cfg.rollbackErrorRate) {
+    // Need minimum samples before making any decision
+    if (report.sampleSize < cfg.minSampleSize) return 'continue';
+
+    // Check for regressions (only after sufficient samples)
+    const v1ErrorRate = report.v1Errors / Math.max(1, report.sampleSize);
+    const v2ErrorRate = report.v2Errors / Math.max(1, report.sampleSize);
+    if (v2ErrorRate > Math.max(v1ErrorRate * cfg.rollbackErrorRate, 0.01)) {
       this.rollback(routeKey, 'error rate regression');
       return 'rollback';
     }
-    if (report.v2Latency > report.v1Latency * cfg.rollbackLatencyMs) {
+    if (report.v2Latency > report.v1Latency * cfg.rollbackLatencyMultiplier) {
       this.rollback(routeKey, 'latency regression');
       return 'rollback';
     }
     if (report.sampleSize < cfg.shadowSampleSize) return 'continue';
     if (report.v2Latency < report.v1Latency && report.v2Errors <= report.v1Errors) {
+      if (!this.config.autonomousPromotion) {
+        return 'manual-review';
+      }
       this.promote(routeKey, 'performance improvement and equivalent error rate');
       return 'promote';
     }

@@ -15,6 +15,8 @@ import { FrameworkAdapter } from './adapters/types';
 import { SeimEventBus } from './events';
 import { Logger } from './logger';
 import { OptimizationWorker } from './worker';
+import { FeatureScaffolder } from './scaffolder';
+import { CandidateLifecycleManager, ShadowSample } from './candidateLifecycle';
 
 interface MiddlewareDeps {
   metrics: InMemoryMetricsStore;
@@ -31,6 +33,7 @@ interface MiddlewareDeps {
   events: SeimEventBus;
   logger: Logger;
   worker: OptimizationWorker;
+  scaffolder: FeatureScaffolder;
 }
 
 export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => any {
@@ -42,7 +45,7 @@ export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => 
   });
 
   return function listener(): any {
-    return adapter.createMiddleware(
+    const innerMiddleware = adapter.createMiddleware(
       // onRequest — lightweight, just records start time
       (_req: any, _res: any, _routeKey: string) => {},
 
@@ -52,40 +55,78 @@ export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => 
           // Cache source code for background worker (req.route is populated on response finish)
           const routeInfo = findRouteHandler(_req);
           if (routeInfo) {
-            sourceCache.set(routeKey, routeInfo.source);
+            setEvictingMap(sourceCache, routeKey, routeInfo.source);
           }
 
-          // Check for pending candidates that need shadow testing
-          const pending = pendingCandidates.get(routeKey);
-          if (pending && routeInfo && config.mode === 'bypass') {
-            pendingCandidates.delete(routeKey);
+          // Check for candidates that need shadow testing (strictly gated to read-only methods)
+          const liveCandidate = candidateLifecycle.getCandidateForShadow(routeKey);
+          const reqMethod = (_req?.method || 'GET').toUpperCase();
+          const allowedMethods = config.experiment.shadowAllowedMethods || ['GET', 'HEAD', 'OPTIONS'];
+          if (liveCandidate && routeInfo && config.mode === 'bypass' && allowedMethods.map(m => m.toUpperCase()).includes(reqMethod)) {
+            // DO NOT delete the candidate — keep it for sample accumulation
+            const pending = liveCandidate.candidate;
             const optimized = buildOptimizedHandler(pending, deps.sandbox, config.experiment.sandboxTimeoutMs || 500);
-            deps.shadow.run(routeKey, routeInfo.handle, optimized, _req)
+            deps.shadow.run(routeKey, routeInfo.handle, optimized, _req, allowedMethods)
               .then(async (result) => {
+                // Record shadow sample
+                const sample: ShadowSample = {
+                  v1Latency: result.v1Latency,
+                  v2Latency: result.v2Latency,
+                  v1Error: result.v1Error,
+                  v2Error: result.v2Error,
+                  v1Output: result.v1Output,
+                  v2Output: result.v2Output,
+                  sampledAt: Date.now(),
+                };
+                const samplesComplete = candidateLifecycle.recordShadowSample(routeKey, sample);
+
                 const validated = await deps.validation.validate(pending, result.v1Output, result.v2Output, _req, {
                   v1Latency: result.v1Latency,
                   v2Latency: result.v2Latency,
                 });
                 if (validated.overall) {
                   deps.rollback.registerShadow(routeKey, { route: routeInfo.route, index: routeInfo.index }, routeInfo.handle, optimized);
-                  const report = deps.shadow.getReport(routeKey);
-                  if (report && report.sampleSize >= config.experiment.shadowSampleSize) {
-                    const evalResult = deps.rollback.evaluate(routeKey, report);
-                    if (evalResult === 'promote') {
-                      deps.endpointTracker.recordSuccess(routeKey);
-                      deps.events.emitEvent('optimization:promoted', {
-                        routeKey,
-                        candidateId: pending.id,
-                        latencyImprovement: result.v1Latency - result.v2Latency,
-                      });
-                      deps.logger.info('Optimization promoted', {
-                        routeKey,
-                        candidateId: pending.id,
-                        improvement: `${Math.round(result.v1Latency - result.v2Latency)}ms`,
-                      });
+
+                  // Only evaluate for promotion once enough samples are collected
+                  if (samplesComplete) {
+                    const report = deps.shadow.getReport(routeKey);
+                    if (report) {
+                      const evalResult = deps.rollback.evaluate(routeKey, report);
+                      if (evalResult === 'promote') {
+                        candidateLifecycle.transition(routeKey, 'promoted', 'performance improvement');
+                        candidateLifecycle.remove(routeKey);
+                        deps.endpointTracker.recordSuccess(routeKey);
+                        deps.events.emitEvent('optimization:promoted', {
+                          routeKey,
+                          candidateId: pending.id,
+                          latencyImprovement: result.v1Latency - result.v2Latency,
+                        });
+                        deps.logger.info('Optimization promoted', {
+                          routeKey,
+                          candidateId: pending.id,
+                          improvement: `${Math.round(result.v1Latency - result.v2Latency)}ms`,
+                        });
+                      } else if (evalResult === 'manual-review') {
+                        candidateLifecycle.transition(routeKey, 'approved', 'awaiting manual review');
+                        deps.events.emitEvent('optimization:detected', {
+                          routeKey,
+                          pattern: pending.pattern,
+                          severity: pending.severity,
+                          candidateId: pending.id,
+                        });
+                        deps.logger.info('Optimization candidate ready for manual review', {
+                          routeKey,
+                          candidateId: pending.id,
+                        });
+                      } else if (evalResult === 'rollback') {
+                        candidateLifecycle.transition(routeKey, 'rejected', 'regression detected');
+                        candidateLifecycle.remove(routeKey);
+                      }
                     }
                   }
                 } else {
+                  candidateLifecycle.transition(routeKey, 'rejected', 'Validation failed');
+                  candidateLifecycle.remove(routeKey);
                   deps.endpointTracker.markAsNonOptimizable(routeKey, 'Validation failed');
                   deps.events.emitEvent('optimization:rejected', {
                     routeKey,
@@ -95,6 +136,8 @@ export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => 
                 }
               })
               .catch((err) => {
+                candidateLifecycle.transition(routeKey, 'rejected', 'Shadow test error');
+                candidateLifecycle.remove(routeKey);
                 deps.endpointTracker.markAsNonOptimizable(routeKey, 'Shadow test error');
                 deps.events.emitEvent('error:sandbox', {
                   routeKey,
@@ -156,7 +199,94 @@ export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => 
         }
       },
     );
+
+    return (req: any, res: any, next: any) => {
+      if (req.path === '/seim/sensor.js') {
+        res.setHeader?.('Content-Type', 'application/javascript');
+        return res.send(SENSOR_CODE);
+      }
+
+      if (req.path === '/seim/telemetry' && req.method === 'POST') {
+        const body = req.body || {};
+        processTelemetry(config, deps, body, req);
+        res.status?.(200);
+        return res.json?.({ ok: true }) || res.send({ ok: true });
+      }
+
+      const originalSend = res.send;
+      res.send = function(body: any) {
+        const contentType = res.getHeader?.('content-type') || res.get?.('content-type') || '';
+        if (body && contentType.includes('text/html')) {
+          let html = typeof body === 'string' ? body : body.toString('utf8');
+          const overrides = frontendOverrides.get(req.path) || { css: '', js: '' };
+          const sensorScript = `<script src="/seim/sensor.js" defer></script>`;
+          const styleOverride = overrides.css ? `<style id="seim-overrides">${overrides.css}</style>` : '';
+          const jsOverride = overrides.js ? `<script id="seim-js-overrides">${overrides.js}</script>` : '';
+          
+          html = html.replace('</head>', `${styleOverride}${jsOverride}</head>`);
+          html = html.replace('</body>', `${sensorScript}</body>`);
+          
+          body = typeof body === 'string' ? html : Buffer.from(html, 'utf8');
+        }
+        return originalSend.call(this, body);
+      };
+
+      innerMiddleware(req, res, next);
+    };
   };
+}
+
+function processTelemetry(config: SeimConfig, deps: MiddlewareDeps, body: any, req: any): void {
+  const { logger, events } = deps;
+  const path = body.path || '/';
+  
+  if (body.type === '404_intent' && config.scaffolding?.enabled) {
+    handleScaffoldIntent(config, deps, body, req).catch(err => {
+      logger.warn('Failed to scaffold dynamic route from intent', { path: body.path, error: err.message });
+    });
+    return;
+  }
+
+  const issues = body.issues || [];
+  if (issues.length === 0) return;
+
+  logger.info('Received frontend telemetry diagnostics', { path, issueCount: issues.length });
+  events.emitEvent('frontend:telemetry_received', { path, issues });
+
+  if (config.mode === 'bypass') {
+    optimizeFrontendForTelemetry(config, deps, path, issues).catch(err => {
+      logger.warn('Failed to optimize frontend for telemetry', { path, error: err.message });
+    });
+  }
+}
+
+async function handleScaffoldIntent(config: SeimConfig, deps: MiddlewareDeps, body: any, req: any): Promise<void> {
+  const { scaffolder, sandbox, logger } = deps;
+  const path = body.path;
+  const method = body.method || 'POST';
+  const intent = body.intent || 'dynamic feature handler';
+
+  logger.info(`Autonomous scaffolder generating route: ${method} ${path} with intent: "${intent}"`);
+
+  // Generate code via scaffolder
+  const code = await scaffolder.scaffoldRoute(method, path, intent);
+
+  // Wrap in sandbox candidate
+  const mockCandidate = {
+    id: `scaffolded-${Date.now()}`,
+    optimizedCode: code,
+    originalCode: '',
+  };
+  const sandboxedHandler = buildOptimizedHandler(mockCandidate as any, sandbox, config.experiment.sandboxTimeoutMs || 5000);
+
+  // Inject route directly on active Express app
+  const app = req.app;
+  if (app && typeof app[method.toLowerCase()] === 'function') {
+    app[method.toLowerCase()](path, sandboxedHandler);
+    logger.info(`Successfully injected and hot-swapped route handler: ${method} ${path}`);
+  } else {
+    logger.warn(`Could not inject route handler: req.app is not a valid Express instance`);
+  }
 }
 
 /**
@@ -208,16 +338,28 @@ async function processOptimization(config: SeimConfig, deps: MiddlewareDeps, rou
       continue;
     }
 
-    // For non-CI/CD, we'd need the live handler to run shadow tests.
-    // Store the candidate for when the next request comes in.
-    pendingCandidates.set(routeKey, candidate);
+    // For non-CI/CD, register the candidate in the lifecycle manager
+    // for shadow testing on subsequent requests.
+    candidateLifecycle.register(routeKey, candidate, config.experiment.shadowSampleSize);
   }
+}
+
+// Helper to set entries in a map with LRU eviction (cap at 500 entries)
+function setEvictingMap<K, V>(map: Map<K, V>, key: K, value: V, maxSize = 500): void {
+  if (map.size >= maxSize && !map.has(key)) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey !== undefined) {
+      map.delete(oldestKey);
+    }
+  }
+  map.set(key, value);
 }
 
 // Source code cache keyed by route
 const sourceCache = new Map<string, string>();
-// Pending candidates awaiting shadow test on next request
-const pendingCandidates = new Map<string, OptimizationCandidate>();
+// Candidate lifecycle manager — replaces the old pendingCandidates Map
+// that deleted candidates after one shadow test (bug: stuck candidates)
+const candidateLifecycle = new CandidateLifecycleManager();
 
 /**
  * Legacy Express-compatible listener for backward compatibility.
@@ -233,42 +375,73 @@ export function createExpressListener(config: SeimConfig, deps: MiddlewareDeps):
       // Cache source code for background worker
       const routeInfo = findRouteHandler(req);
       if (routeInfo) {
-        sourceCache.set(deps.adapter.getRouteKey(req), routeInfo.source);
+        setEvictingMap(sourceCache, deps.adapter.getRouteKey(req), routeInfo.source);
       }
 
-      // Check for pending candidates that need shadow testing
+      // Check for candidates that need shadow testing (strictly gated to read-only methods)
       const routeKey = deps.adapter.getRouteKey(req);
-      const pending = pendingCandidates.get(routeKey);
-      if (pending && routeInfo && config.mode === 'bypass') {
-        pendingCandidates.delete(routeKey);
-        // Run shadow test inline
+      const liveCandidate = candidateLifecycle.getCandidateForShadow(routeKey);
+      const reqMethod = (req?.method || 'GET').toUpperCase();
+      const allowedMethods = config.experiment.shadowAllowedMethods || ['GET', 'HEAD', 'OPTIONS'];
+      if (liveCandidate && routeInfo && config.mode === 'bypass' && allowedMethods.map(m => m.toUpperCase()).includes(reqMethod)) {
+        // DO NOT delete the candidate — keep it for sample accumulation
+        const pending = liveCandidate.candidate;
         const optimized = buildOptimizedHandler(pending, deps.sandbox, config.experiment.sandboxTimeoutMs || 500);
-        deps.shadow.run(routeKey, routeInfo.handle, optimized, req)
+        deps.shadow.run(routeKey, routeInfo.handle, optimized, req, allowedMethods)
           .then(async (result) => {
+            // Record shadow sample
+            const sample: ShadowSample = {
+              v1Latency: result.v1Latency,
+              v2Latency: result.v2Latency,
+              v1Error: result.v1Error,
+              v2Error: result.v2Error,
+              v1Output: result.v1Output,
+              v2Output: result.v2Output,
+              sampledAt: Date.now(),
+            };
+            const samplesComplete = candidateLifecycle.recordShadowSample(routeKey, sample);
+
             const validated = await deps.validation.validate(pending, result.v1Output, result.v2Output, req, {
               v1Latency: result.v1Latency,
               v2Latency: result.v2Latency,
             });
             if (validated.overall) {
               deps.rollback.registerShadow(routeKey, { route: routeInfo.route, index: routeInfo.index }, routeInfo.handle, optimized);
-              const report = deps.shadow.getReport(routeKey);
-              if (report && report.sampleSize >= config.experiment.shadowSampleSize) {
-                const evalResult = deps.rollback.evaluate(routeKey, report);
-                if (evalResult === 'promote') {
-                  deps.endpointTracker.recordSuccess(routeKey);
-                  deps.events.emitEvent('optimization:promoted', {
-                    routeKey,
-                    candidateId: pending.id,
-                    latencyImprovement: result.v1Latency - result.v2Latency,
-                  });
-                  deps.logger.info('Optimization promoted', {
-                    routeKey,
-                    candidateId: pending.id,
-                    improvement: `${Math.round(result.v1Latency - result.v2Latency)}ms`,
-                  });
+
+              // Only evaluate for promotion once enough samples are collected
+              if (samplesComplete) {
+                const report = deps.shadow.getReport(routeKey);
+                if (report) {
+                  const evalResult = deps.rollback.evaluate(routeKey, report);
+                  if (evalResult === 'promote') {
+                    candidateLifecycle.transition(routeKey, 'promoted', 'performance improvement');
+                    candidateLifecycle.remove(routeKey);
+                    deps.endpointTracker.recordSuccess(routeKey);
+                    deps.events.emitEvent('optimization:promoted', {
+                      routeKey,
+                      candidateId: pending.id,
+                      latencyImprovement: result.v1Latency - result.v2Latency,
+                    });
+                    deps.logger.info('Optimization promoted', {
+                      routeKey,
+                      candidateId: pending.id,
+                      improvement: `${Math.round(result.v1Latency - result.v2Latency)}ms`,
+                    });
+                  } else if (evalResult === 'manual-review') {
+                    candidateLifecycle.transition(routeKey, 'approved', 'awaiting manual review');
+                    deps.logger.info('Optimization candidate ready for manual review', {
+                      routeKey,
+                      candidateId: pending.id,
+                    });
+                  } else if (evalResult === 'rollback') {
+                    candidateLifecycle.transition(routeKey, 'rejected', 'regression detected');
+                    candidateLifecycle.remove(routeKey);
+                  }
                 }
               }
             } else {
+              candidateLifecycle.transition(routeKey, 'rejected', 'Validation failed');
+              candidateLifecycle.remove(routeKey);
               deps.endpointTracker.markAsNonOptimizable(routeKey, 'Validation failed');
               deps.events.emitEvent('optimization:rejected', {
                 routeKey,
@@ -278,6 +451,8 @@ export function createExpressListener(config: SeimConfig, deps: MiddlewareDeps):
             }
           })
           .catch((err) => {
+            candidateLifecycle.transition(routeKey, 'rejected', 'Shadow test error');
+            candidateLifecycle.remove(routeKey);
             deps.endpointTracker.markAsNonOptimizable(routeKey, 'Shadow test error');
             deps.events.emitEvent('error:sandbox', {
               routeKey,
@@ -312,3 +487,115 @@ function buildOptimizedHandler(candidate: OptimizationCandidate, sandbox: Sandbo
     });
   };
 }
+
+// Client-side UI diagnostics telemetry overrides cache
+export const frontendOverrides = new Map<string, { css: string; js: string }>();
+
+// Telemetry optimization helper using the LLM client
+async function optimizeFrontendForTelemetry(config: SeimConfig, deps: MiddlewareDeps, path: string, issues: any[]): Promise<void> {
+  const overrides = await deps.optimization.llm.generateFrontendOverrides(path, issues);
+  setEvictingMap(frontendOverrides, path, overrides);
+}
+
+// Sandboxed client-side diagnostics telemetry sensor script
+export const SENSOR_CODE = `
+(function() {
+  const issues = [];
+  
+  function checkAccessibility() {
+    document.querySelectorAll('img').forEach(img => {
+      if (!img.hasAttribute('alt') || img.getAttribute('alt').trim() === '') {
+        issues.push({ type: 'accessibility', element: img.tagName, selector: getSelector(img), message: 'Missing alt attribute on image' });
+      }
+    });
+
+    document.querySelectorAll('button').forEach(btn => {
+      if (btn.innerText.trim() === '' && !btn.hasAttribute('aria-label') && !btn.hasAttribute('aria-labelledby')) {
+        issues.push({ type: 'accessibility', element: btn.tagName, selector: getSelector(btn), message: 'Button has no readable text or ARIA label' });
+      }
+    });
+
+    document.querySelectorAll('input').forEach(input => {
+      if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button') return;
+      const id = input.getAttribute('id');
+      let hasLabel = false;
+      if (id) {
+        hasLabel = document.querySelector('label[for="' + id + '"]') !== null;
+      }
+      if (!hasLabel) {
+        let parent = input.parentElement;
+        while (parent) {
+          if (parent.tagName === 'LABEL') { hasLabel = true; break; }
+          parent = parent.parentElement;
+        }
+      }
+      if (!hasLabel) {
+        issues.push({ type: 'accessibility', element: input.tagName, selector: getSelector(input), message: 'Form input is missing an associated label' });
+      }
+    });
+  }
+
+  function checkLayoutOverflow() {
+    const width = window.innerWidth;
+    document.querySelectorAll('*').forEach(el => {
+      const rect = el.getBoundingClientRect();
+      if (rect.right > width + 1) {
+        issues.push({ type: 'layout', element: el.tagName, selector: getSelector(el), message: 'Element overflows viewport horizontally (right: ' + rect.right + 'px, viewport: ' + width + 'px)' });
+      }
+    });
+  }
+
+  function setupFormUXTracking() {
+    document.addEventListener('invalid', (e) => {
+      issues.push({ type: 'form-ux', element: e.target.tagName, selector: getSelector(e.target), message: 'Form field validation failed (constraint: ' + e.target.validationMessage + ')' });
+    }, true);
+  }
+
+  function getSelector(el) {
+    if (el.id) return '#' + el.id;
+    let path = [];
+    while (el && el.nodeType === Node.ELEMENT_NODE) {
+      let selector = el.nodeName.toLowerCase();
+      if (el.className) {
+        selector += '.' + Array.from(el.classList).join('.');
+      }
+      path.unshift(selector);
+      el = el.parentNode;
+    }
+    return path.join(' > ');
+  }
+
+  if (typeof PerformanceObserver !== 'undefined') {
+    try {
+      const observer = new PerformanceObserver((list) => {
+        list.getEntries().forEach((entry) => {
+          const fid = entry.processingStart - entry.startTime;
+          if (fid > 100) {
+            issues.push({ type: 'performance', message: 'First Input Delay (FID) exceeded 100ms: ' + Math.round(fid) + 'ms', value: fid });
+          }
+        });
+      });
+      observer.observe({ type: 'first-input', buffered: true });
+    } catch (e) {}
+  }
+
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      checkAccessibility();
+      checkLayoutOverflow();
+      setupFormUXTracking();
+      reportIssues();
+    }, 1000);
+  });
+
+  function reportIssues() {
+    if (issues.length === 0) return;
+    const payload = JSON.stringify({ path: window.location.pathname, issues: issues });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/seim/telemetry', payload);
+    } else {
+      fetch('/seim/telemetry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload });
+    }
+  }
+})();
+`;

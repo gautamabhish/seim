@@ -82,6 +82,43 @@ export class LLMClient {
   /**
    * Generate a human-readable explanation for an optimization.
    */
+  public async generateFrontendOverrides(path: string, issues: any[]): Promise<{ css: string; js: string }> {
+    if (!this.apiKey) {
+      // Local fallback simulator when AI is disabled/offline
+      let css = '';
+      let js = '';
+      for (const issue of issues) {
+        if (issue.type === 'layout' && issue.selector) {
+          css += `${issue.selector} { max-width: 100% !important; box-sizing: border-box !important; overflow: hidden !important; }\n`;
+        }
+        if (issue.type === 'accessibility' && issue.message.includes('alt attribute') && issue.selector) {
+          js += `const el = document.querySelector('${issue.selector}'); if(el) el.setAttribute('alt', 'Optimized image description');\n`;
+        }
+        if (issue.type === 'accessibility' && issue.message.includes('readable text or ARIA label') && issue.selector) {
+          js += `const el = document.querySelector('${issue.selector}'); if(el) el.setAttribute('aria-label', 'Interactive action button');\n`;
+        }
+        if (issue.type === 'accessibility' && issue.message.includes('associated label') && issue.selector) {
+          js += `const el = document.querySelector('${issue.selector}'); if(el) { el.setAttribute('aria-label', 'Input field'); }\n`;
+        }
+      }
+      return { css, js };
+    }
+
+    const systemPrompt = "You are a senior frontend optimization expert. Generate minimal CSS and JS overrides to fix specific layout overflows and accessibility errors based on the reported issues. Respond ONLY with JSON format: {\"css\": \"...\", \"js\": \"...\"}. Do not include markdown code block characters in your final response.";
+    const userPrompt = `Generate overrides for the page path: ${path}\nIssues:\n${JSON.stringify(issues, null, 2)}`;
+    try {
+      const content = await this.chat(systemPrompt, userPrompt);
+      const jsonMatch = content.match(/{[\s\S]*}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+      return { css: '', js: '' };
+    } catch {
+      // Fallback on error
+      return { css: '', js: '' };
+    }
+  }
+
   public async explain(original: string, optimized: string, pattern: string, improvement: number): Promise<string> {
     if (!this.apiKey) return `Optimized for pattern "${pattern}" with ${improvement.toFixed(0)}ms latency reduction.`;
     const prompt = `Explain this optimization in 2-3 sentences for a developer. What was changed and why it's faster.\n\nPattern: ${pattern}\nLatency improvement: ${improvement.toFixed(0)}ms\n\nOriginal:\n${original}\n\nOptimized:\n${optimized}`;
@@ -193,7 +230,7 @@ export class LLMClient {
     }
   }
 
-  private async chat(system: string, user: string): Promise<string> {
+  public async chat(system: string, user: string): Promise<string> {
     const url = new URL(this.baseUrl);
     const body = this.buildBody(system, user);
     const { options, client } = this.buildRequest(url, body);
@@ -354,16 +391,25 @@ Original handler:
 ${source}`;
   }
 
+  private sanitizeSourceForPrompt(source: string): string {
+    // Strip block comments (/* ... */) and line comments (// ...) to prevent prompt injection
+    return source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*/g, '');
+  }
+
   private buildOptimizePrompt(source: string, pattern: string): string {
+    const cleanSource = this.sanitizeSourceForPrompt(source);
     return `Optimize the following Express route handler for the detected pattern: ${pattern}.
 
 Keep the function signature as an async Express handler (req, res, next). Do not change authentication, authorization, payment logic, business rules, or the response schema. Do not introduce secrets or network calls. Return ONLY the function body inside a JavaScript code block. Do not include explanation.
 
 Original handler:
-${source}`;
+${cleanSource}`;
   }
 
   private buildHolisticAnalysisPrompt(source: string, metricsContext: string): string {
+    const cleanSource = this.sanitizeSourceForPrompt(source);
     return `Analyze the following Express route handler code holistically for performance optimization opportunities.
 ${metricsContext}
 
@@ -384,19 +430,21 @@ Respond with JSON only:
 }
 
 Original handler code:
-${source}`;
+${cleanSource}`;
   }
 
   private buildReviewPrompt(original: string, optimized: string): string {
+    const cleanOriginal = this.sanitizeSourceForPrompt(original);
+    const cleanOptimized = this.sanitizeSourceForPrompt(optimized);
     return `Review whether the optimized Express handler preserves the original behavior and does not introduce security issues. Respond with JSON only:
 
 {"pass": true|false, "reason": "..."}
 
 Original:
-${original}
+${cleanOriginal}
 
 Optimized:
-${optimized}`;
+${cleanOptimized}`;
   }
 
   private extractCode(content: string): string | undefined {

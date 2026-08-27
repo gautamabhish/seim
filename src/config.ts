@@ -20,7 +20,7 @@ export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {
   crossRouteIntelligence: true,
 };
 
-export const DEFAULT_STUDIO_PATH = '/asdfghjklkjhgfdsasdfghj';
+export const DEFAULT_STUDIO_PATH = '/seim';
 export const DEFAULT_STORAGE_PATH = './.seim-storage';
 
 export const DEFAULT_SECURITY_CONFIG: NonNullable<SeimConfig['security']> = {
@@ -34,7 +34,7 @@ export const DEFAULT_SECURITY_CONFIG: NonNullable<SeimConfig['security']> = {
 export const DEFAULT_EXPERIMENT_CONFIG: NonNullable<SeimConfig['experiment']> = {
   confidenceThreshold: 0.92,
   canaryPercent: 5,
-  rollbackLatencyMs: 1.2,
+  rollbackLatencyMultiplier: 1.2,
   rollbackErrorRate: 1.5,
   minSampleSize: 100,
   shadowCooldownMs: 60000,
@@ -53,17 +53,6 @@ export function getDefaultConfig(): SeimConfig {
     businessRules: [],
     securityRules: [],
     production: {},
-    build: {
-      enabled: false,
-      buildCommand: 'npm run build',
-      outputDir: './dist/optimized',
-      sourceDir: './src',
-      typescript: true,
-      minify: true,
-      sourcemap: true,
-      autoBuild: false,
-      buildTimeout: 60000
-    },
     ai: {
       generatorModel: 'gpt-4',
       reviewerModel: 'gpt-4',
@@ -96,6 +85,7 @@ export function getDefaultConfig(): SeimConfig {
       rateLimit: false,
     },
     evolution: { ...DEFAULT_EVOLUTION_CONFIG },
+    autonomousPromotion: false,
   };
 }
 
@@ -130,6 +120,28 @@ export function mergeConfig(user: Partial<SeimConfig> = {}): SeimConfig {
     environment: effective.environment ?? defaults.environment,
     framework: effective.framework ?? defaults.framework,
     production: { ...defaults.production, ...(effective.production ?? {}) },
+    autonomousPromotion: effective.autonomousPromotion ?? defaults.autonomousPromotion,
+    behavior: {
+      enabled: false,
+      minPatternFrequency: 3,
+      maxEvents: 10000,
+      autoScaffold: false,
+      excludePaths: ['/health', '/metrics', '/favicon.ico', '/seim'],
+      ...(effective.behavior ?? {}),
+    },
+    frontend: {
+      enabled: false,
+      outputDir: './src/components/seim-generated',
+      writeToDisk: false,
+      framework: 'react',
+      typescript: true,
+      ...(effective.frontend ?? {}),
+    },
+    patterns: {
+      enabled: true,
+      ...(effective.patterns ?? {}),
+    },
+
   };
 
   if (merged.environment === 'production') {

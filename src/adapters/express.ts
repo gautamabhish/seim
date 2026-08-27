@@ -1,4 +1,5 @@
 import { FrameworkAdapter, RouteHandlerInfo, OnRequestCallback, OnResponseCallback } from './types';
+import { normalizePath } from '../routeNormalizer';
 
 export class ExpressAdapter implements FrameworkAdapter {
   readonly name = 'express';
@@ -86,11 +87,16 @@ export class ExpressAdapter implements FrameworkAdapter {
     return undefined;
   }
 
+  private warnedPaths = new Set<string>();
+
   swapHandler(routeInfo: RouteHandlerInfo, newHandler: Function): void {
     routeInfo.route.stack[routeInfo.index].handle = newHandler;
   }
 
   getRouteKey(req: any): string {
-    return (req.route?.path as string | undefined) || req.path || req.url || '/';
+    const routePath = req.route?.path as string | undefined;
+    if (routePath) return routePath;
+    const raw = req.path || req.url || '/';
+    return normalizePath(raw);
   }
 }

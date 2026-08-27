@@ -2,10 +2,8 @@ import * as vm from 'vm';
 import { Request, Response, NextFunction } from 'express';
 
 const BUILTINS = new Set([
-  'assert', 'async_hooks', 'buffer', 'child_process', 'cluster', 'crypto', 'dns',
-  'events', 'fs', 'http', 'https', 'net', 'os', 'path', 'perf_hooks', 'process',
-  'punycode', 'querystring', 'readline', 'repl', 'stream', 'string_decoder',
-  'sys', 'timers', 'tls', 'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib',
+  'buffer', 'crypto', 'events', 'path', 'querystring', 'stream', 'string_decoder',
+  'url', 'util', 'timers'
 ]);
 
 export class Sandbox {
@@ -27,6 +25,16 @@ export class Sandbox {
     _next: NextFunction,
     timeoutMs = 500
   ): Promise<unknown> {
+    // Static analysis check to detect and prevent dynamic or blocked require imports
+    const blockedPattern = /require\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
+    let match;
+    while ((match = blockedPattern.exec(code)) !== null) {
+      const moduleName = match[1];
+      if (!BUILTINS.has(moduleName)) {
+        throw new Error(`SEIM sandbox security violation: module '${moduleName}' is not allowed`);
+      }
+    }
+
     const body = this.extractFunctionBody(code);
     if (this.ivm) {
       return this.runIsolated(body, req, res, timeoutMs);
@@ -47,6 +55,20 @@ export class Sandbox {
       context.global.setSync('__resEnd', new this.ivm.Reference(res.end.bind(res)));
       context.global.setSync('req', new this.ivm.ExternalCopy(reqSnapshot).copyInto());
 
+      // Bind dynamic in-memory database functions for isolated-vm execution
+      context.global.setSync('__seimDbCollectionInsert', new this.ivm.Reference((name: string, doc: any) => {
+        return (global as any).seimDb.collection(name).insert(doc);
+      }));
+      context.global.setSync('__seimDbCollectionFind', new this.ivm.Reference((name: string, query: any) => {
+        return (global as any).seimDb.collection(name).find(query);
+      }));
+      context.global.setSync('__seimDbCollectionUpdate', new this.ivm.Reference((name: string, query: any, updates: any) => {
+        return (global as any).seimDb.collection(name).update(query, updates);
+      }));
+      context.global.setSync('__seimDbCollectionRemove', new this.ivm.Reference((name: string, query: any) => {
+        return (global as any).seimDb.collection(name).remove(query);
+      }));
+
       context.evalSync(`
         var res = {
           json: function(body) {
@@ -63,6 +85,29 @@ export class Sandbox {
           },
           end: function() {
             __resEnd.applySync(undefined, [], { arguments: { copy: true }, result: { reference: true } });
+          }
+        };
+
+        global.seimDb = {
+          collection: function(name) {
+            return {
+              insert: function(doc) {
+                var r = __seimDbCollectionInsert.applySync(undefined, [name, doc], { arguments: { copy: true }, result: { copy: true } });
+                return Promise.resolve(r);
+              },
+              find: function(query) {
+                var r = __seimDbCollectionFind.applySync(undefined, [name, query || {}], { arguments: { copy: true }, result: { copy: true } });
+                return Promise.resolve(r);
+              },
+              update: function(query, updates) {
+                var r = __seimDbCollectionUpdate.applySync(undefined, [name, query, updates], { arguments: { copy: true }, result: { copy: true } });
+                return Promise.resolve(r);
+              },
+              remove: function(query) {
+                var r = __seimDbCollectionRemove.applySync(undefined, [name, query], { arguments: { copy: true }, result: { copy: true } });
+                return Promise.resolve(r);
+              }
+            };
           }
         };
       `);

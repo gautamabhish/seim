@@ -9,7 +9,8 @@ export async function initCommand(_args: string[]): Promise<void> {
   }
 
   const config = {
-    mode: 'bypass',
+    mode: 'restrict',
+    studioPath: '/seim',
     framework: 'express',
     logging: {
       level: 'info',
@@ -20,6 +21,7 @@ export async function initCommand(_args: string[]): Promise<void> {
       shadowCooldownMs: 60000,
       shadowSampleSize: 25,
       sandboxTimeoutMs: 500,
+      shadowAllowedMethods: ['GET', 'HEAD', 'OPTIONS'],
     },
     worker: {
       enabled: true,
@@ -28,10 +30,21 @@ export async function initCommand(_args: string[]): Promise<void> {
     ai: {
       enabled: false,
     },
-    autoMiddleware: {
-      etag: true,
-      compression: true,
-      caching: true,
+    behavior: {
+      enabled: true,
+      autoScaffold: false,
+    },
+    frontend: {
+      enabled: false,
+      framework: 'react',
+    },
+    patterns: {
+      enabled: true,
+    },
+    security: {
+      blockAuthenticationChanges: true,
+      blockPaymentChanges: true,
+      blockSecretUsage: true,
     },
   };
 
@@ -42,9 +55,10 @@ export async function initCommand(_args: string[]): Promise<void> {
   console.log('  1. Install seim: npm install seim');
   console.log('  2. Add to your app:');
   console.log('');
-  console.log("     const seim = require('seim').default;");
+  console.log("     const { seim } = require('seim');");
   console.log('     const s = seim();');
   console.log('     app.use(s.listener());');
+  console.log('     // Dashboard available at /seim');
   console.log('');
   console.log('  3. Set mode to "bypass" to enable autonomous optimization');
 }

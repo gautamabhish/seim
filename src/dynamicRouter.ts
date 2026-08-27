@@ -1,13 +1,16 @@
 import { RequestHandler } from 'express';
 import { ProductionManager } from './productionManager';
+import { StableCanaryAssigner, CanaryAssigner } from './canaryAssignment';
 
 export class DynamicRouter {
   private originalHandlers: Map<string, RequestHandler> = new Map();
   private optimizedHandlers: Map<string, RequestHandler> = new Map();
   private productionManager: ProductionManager;
+  private canaryAssigner: CanaryAssigner;
 
-  constructor(productionManager: ProductionManager) {
+  constructor(productionManager: ProductionManager, canaryAssigner: CanaryAssigner = new StableCanaryAssigner()) {
     this.productionManager = productionManager;
+    this.canaryAssigner = canaryAssigner;
   }
 
   public registerHandler(routeKey: string, handler: RequestHandler, type: 'original' | 'optimized'): void {
@@ -18,7 +21,7 @@ export class DynamicRouter {
     }
   }
 
-  public getHandler(routeKey: string): RequestHandler {
+  public getHandler(routeKey: string, req?: any): RequestHandler {
     const deployment = this.productionManager.getDeployment(routeKey);
     
     // If no deployment or original version, return original handler
@@ -26,8 +29,8 @@ export class DynamicRouter {
       return this.originalHandlers.get(routeKey) || this.fallbackHandler(routeKey);
     }
 
-    // If optimized version, check canary percentage
-    const shouldUseOptimized = Math.random() * 100 < deployment.canaryPercent;
+    // If optimized version, check canary percentage via stable hash assigner
+    const shouldUseOptimized = this.canaryAssigner.shouldUseCanary(req, deployment.canaryPercent);
     
     if (shouldUseOptimized) {
       return this.optimizedHandlers.get(routeKey) || this.originalHandlers.get(routeKey) || this.fallbackHandler(routeKey);
@@ -38,7 +41,7 @@ export class DynamicRouter {
 
   public createDynamicMiddleware(routeKey: string): RequestHandler {
     return (req, res, next) => {
-      const handler = this.getHandler(routeKey);
+      const handler = this.getHandler(routeKey, req);
       if (handler) {
         handler(req, res, next);
       } else {

@@ -20,7 +20,7 @@ describe('VersionManager', () => {
       experiment: {
         confidenceThreshold: 0.92,
         canaryPercent: 5,
-        rollbackLatencyMs: 1.2,
+        rollbackLatencyMultiplier: 1.2,
         rollbackErrorRate: 1.5,
         minSampleSize: 100,
         shadowCooldownMs: 60000,

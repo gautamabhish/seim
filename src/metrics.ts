@@ -42,9 +42,27 @@ export class InMemoryMetricsStore implements MetricsStore {
   private startTime = Date.now();
   private windowMs: number;
   private recordCount = 0;
+  private readonly MAX_TRACKED_ROUTES = 500;
+  private readonly MAX_SAMPLES_PER_ROUTE = 2000;
+  private cleanupTimer: NodeJS.Timeout | null = null;
 
   constructor(windowMs: number = DEFAULT_WINDOW_MS) {
     this.windowMs = windowMs;
+    // Periodic background cleanup so memory is freed even if traffic pauses
+    this.cleanupTimer = setInterval(() => {
+      this.cleanup(Date.now());
+    }, 60_000);
+    if (this.cleanupTimer && typeof this.cleanupTimer.unref === 'function') {
+      this.cleanupTimer.unref();
+    }
+  }
+
+  public destroy(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+    this.timedRoutes.clear();
   }
 
   public record(
@@ -59,6 +77,19 @@ export class InMemoryMetricsStore implements MetricsStore {
     const now = Date.now();
     let r = this.timedRoutes.get(routeKey);
     if (!r) {
+      // Guard against route cardinality explosion: evict stalest route if over limit
+      if (this.timedRoutes.size >= this.MAX_TRACKED_ROUTES) {
+        let oldestKey: string | null = null;
+        let oldestSeen = Infinity;
+        for (const [key, data] of this.timedRoutes.entries()) {
+          if (data.lastSeen < oldestSeen) {
+            oldestSeen = data.lastSeen;
+            oldestKey = key;
+          }
+        }
+        if (oldestKey) this.timedRoutes.delete(oldestKey);
+      }
+
       r = {
         durations: [],
         responseSizes: [],
@@ -76,6 +107,14 @@ export class InMemoryMetricsStore implements MetricsStore {
 
     r.requestCount += 1;
     r.totalDuration += duration;
+
+    // Cap array sizes to reduce memory and GC pressure
+    if (r.durations.length >= this.MAX_SAMPLES_PER_ROUTE) {
+      r.durations.shift();
+      r.responseSizes.shift();
+      r.payloadSizes.shift();
+    }
+
     r.durations.push({ ts: now, value: duration });
     r.responseSizes.push({ ts: now, value: responseSize });
     r.payloadSizes.push({ ts: now, value: payloadSize });
@@ -241,8 +280,13 @@ export class InMemoryMetricsStore implements MetricsStore {
   private cleanup(now: number): void {
     const cutoff = now - this.windowMs;
     const bucketCutoff = Math.floor(now / 60_000) - MAX_BUCKET_MINUTES;
+    const routeStaleCutoff = now - 3600_000; // 1 hour stale threshold
 
-    for (const r of this.timedRoutes.values()) {
+    for (const [routeKey, r] of this.timedRoutes.entries()) {
+      if (r.lastSeen < routeStaleCutoff) {
+        this.timedRoutes.delete(routeKey);
+        continue;
+      }
       r.durations = this.pruneStale(r.durations, cutoff);
       r.responseSizes = this.pruneStale(r.responseSizes, cutoff);
       r.payloadSizes = this.pruneStale(r.payloadSizes, cutoff);

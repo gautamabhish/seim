@@ -146,7 +146,7 @@ interface SeimConfig {
   experiment?: {
     confidenceThreshold: number;
     canaryPercent: number;
-    rollbackLatencyMs: number;
+    rollbackLatencyMultiplier: number;
     rollbackErrorRate: number;
     minSampleSize: number;
     shadowCooldownMs: number;
@@ -184,6 +184,10 @@ interface SeimConfig {
     compression?: boolean;
     caching?: boolean;
     rateLimit?: boolean;
+  };
+  scaffolding?: {
+    enabled: boolean;
+    maxDynamicRoutes?: number;
   };
 }
 ```
@@ -314,15 +318,15 @@ npm run test:integration  # Integration tests
 
 ### Test Coverage
 
-* **Unit Tests**: metrics analyzer, endpoint tracker, version manager
+* **Unit Tests**: metrics analyzer, endpoint tracker, version manager, sandbox isolation, security gates, and rollback engines
 * **Stress Tests**: load handling and memory efficiency
 * **Benchmark Tests**: performance metrics and overhead
 * **Feasibility Tests**: adoption feasibility metrics
-* **Integration Tests**: complete workflow scenarios
+* **Integration Tests**: complete workflow scenarios, frontend telemetry overrides, and autonomous feature scaffolding
 
 ### Test Results
 
-* **Total Tests**: 73
+* **Total Tests**: 87
 * **Pass Rate**: 100%
 * **Performance**: Sub-millisecond operations for all components
 * **Scalability**: Linear scaling with load
@@ -352,6 +356,7 @@ seim/
 │   ├── productionManager.ts # Production deployment manager
 │   ├── rollback.ts         # Rollback mechanism
 │   ├── sandbox.ts          # Code execution sandbox with globals scope injector
+│   ├── scaffolder.ts       # Autonomous feature scaffolding engine
 │   ├── shadow.ts           # Shadow testing engine
 │   ├── shadowLimiter.ts    # Shadow testing rate limiter
 │   ├── storageFactory.ts   # Storage adapter factory
@@ -362,7 +367,6 @@ seim/
 ├── demo-app/               # Full-stack developer dashboard playground
 ├── tests/                  # Comprehensive test suite
 ├── examples/               # Example scripts
-├── docs/                   # Documentation
 ├── dist/                   # Compiled JavaScript
 └── package.json            # Package configuration
 ```

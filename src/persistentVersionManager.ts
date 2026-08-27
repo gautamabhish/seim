@@ -36,15 +36,24 @@ export class FileStorageAdapter implements StorageAdapter {
     return path.join(this.storagePath, `${safeKey}.json`);
   }
 
+  private async atomicWriteFile(filePath: string, content: string): Promise<void> {
+    const fs = require('fs').promises;
+    const tmpPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    await fs.writeFile(tmpPath, content, 'utf-8');
+    await fs.rename(tmpPath, filePath);
+  }
+
   async saveVersion(routeKey: string, version: EndpointVersion): Promise<void> {
     const fs = require('fs').promises;
     const filePath = this.getRouteFilePath(routeKey);
     
     let versions: EndpointVersion[] = [];
+    let transitions: any[] = [];
     try {
       const data = await fs.readFile(filePath, 'utf-8');
       const parsed = JSON.parse(data);
       versions = parsed.versions || [];
+      transitions = parsed.transitions || [];
     } catch {
       // File doesn't exist yet, that's fine
     }
@@ -52,12 +61,13 @@ export class FileStorageAdapter implements StorageAdapter {
     versions.push(version);
     
     const fileData = {
+      routeKey,
       versions,
-      transitions: [],
+      transitions,
       activeVersion: versions.length > 0 ? versions[versions.length - 1].id : undefined,
     };
     
-    await fs.writeFile(filePath, JSON.stringify(fileData, null, 2));
+    await this.atomicWriteFile(filePath, JSON.stringify(fileData, null, 2));
   }
 
   async getVersions(routeKey: string): Promise<EndpointVersion[]> {
@@ -90,10 +100,11 @@ export class FileStorageAdapter implements StorageAdapter {
       // File doesn't exist yet
     }
 
+    fileData.routeKey = routeKey;
     fileData.transitions = fileData.transitions || [];
     fileData.transitions.push(transition);
     
-    await fs.writeFile(filePath, JSON.stringify(fileData, null, 2));
+    await this.atomicWriteFile(filePath, JSON.stringify(fileData, null, 2));
   }
 
   async getTransitions(routeKey: string): Promise<VersionTransition[]> {
@@ -121,9 +132,10 @@ export class FileStorageAdapter implements StorageAdapter {
       // File doesn't exist yet
     }
 
+    fileData.routeKey = routeKey;
     fileData.activeVersion = versionId;
     
-    await fs.writeFile(filePath, JSON.stringify(fileData, null, 2));
+    await this.atomicWriteFile(filePath, JSON.stringify(fileData, null, 2));
   }
 
   async getActiveVersion(routeKey: string): Promise<string | undefined> {
@@ -151,6 +163,7 @@ export class FileStorageAdapter implements StorageAdapter {
       // File doesn't exist yet
     }
 
+    fileData.routeKey = routeKey;
     const version = fileData.versions?.find((v: any) => v.id === versionId);
     if (version) {
       version.performance = { ...version.performance, ...performance };
@@ -161,10 +174,12 @@ export class FileStorageAdapter implements StorageAdapter {
 
 export class PersistentVersionManager extends VersionManager {
   private storageAdapter: StorageAdapter;
+  private storagePath: string;
 
   constructor(config: SeimConfig, storageAdapter: StorageAdapter) {
     super(config);
     this.storageAdapter = storageAdapter;
+    this.storagePath = (config as any).storagePath || './.seim-storage';
   }
 
   public override async createVersion(routeKey: string, code: string, metadata: any): Promise<EndpointVersion> {
@@ -253,7 +268,7 @@ export class PersistentVersionManager extends VersionManager {
     const path = require('path');
     
     try {
-      const storagePath = './.seim-storage';
+      const storagePath = this.storagePath;
       if (!fs.existsSync(storagePath)) {
         return; // No storage directory yet
       }
@@ -261,7 +276,13 @@ export class PersistentVersionManager extends VersionManager {
       const files = fs.readdirSync(storagePath);
       for (const file of files) {
         if (file.endsWith('.json')) {
-          const routeKey = file.replace('.json', '').replace(/_/g, '/');
+          const filePath = path.join(storagePath, file);
+          const data = fs.readFileSync(filePath, 'utf-8');
+          const parsed = JSON.parse(data);
+          let routeKey = parsed.routeKey;
+          if (!routeKey) {
+            routeKey = file.replace('.json', '').replace(/_/g, '/');
+          }
           await this.loadState(routeKey);
         }
       }
