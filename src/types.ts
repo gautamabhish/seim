@@ -127,6 +127,10 @@ export interface SeimConfig {
     autoScaffold?: boolean;
     /** Paths to exclude from behavior tracking (e.g., health checks) */
     excludePaths?: string[];
+    /** How often to run the IssueStream scanner (ms). Default: 60000 (1 min) */
+    issueCheckIntervalMs?: number;
+    /** Minimum sessions required to flag an issue. Default: 3 */
+    minIssueSessionThreshold?: number;
   };
 
   /** Frontend React component generation configuration */
@@ -141,6 +145,20 @@ export interface SeimConfig {
     framework?: 'react' | 'next' | 'vite';
     /** Whether to use TypeScript in generated components. Default: true */
     typescript?: boolean;
+    /** Path to write HMR trigger / reload signal */
+    hmrSignalPath?: string;
+    /** Path to write route manifest (e.g., seim-routes.tsx) */
+    routesFile?: string;
+  };
+
+  /** Product evolution changelog ledger */
+  changelog?: {
+    /** Enable changelog recording. Default: true */
+    enabled?: boolean;
+    /** Maximum entries to retain. Default: 500 */
+    maxEntries?: number;
+    /** Custom persistence file path */
+    persistPath?: string;
   };
 
   /** Custom optimization pattern templates registered by the developer */
@@ -306,6 +324,10 @@ export interface SeimInstance {
   featureDiscovery?: any;
   reactRegistry?: any;
   reactGenerator?: any;
+  issueStream?: any;
+  orchestrator?: any;
+  frontendEvolver?: any;
+  changelog?: any;
 }
 
 export type RequestListener = (req: GenericRequest, res: GenericResponse, next: () => void) => void;

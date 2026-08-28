@@ -21,6 +21,12 @@ export class DynamicRouter {
     }
   }
 
+  public registerRoute(routePath: string, method: string, handler: RequestHandler): void {
+    const routeKey = `${method.toUpperCase()} ${routePath}`;
+    this.optimizedHandlers.set(routeKey, handler);
+    this.originalHandlers.set(routeKey, handler);
+  }
+
   public getHandler(routeKey: string, req?: any): RequestHandler {
     const deployment = this.productionManager.getDeployment(routeKey);
     

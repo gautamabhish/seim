@@ -36,7 +36,11 @@ interface MiddlewareDeps {
   scaffolder: FeatureScaffolder;
 }
 
-export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => any {
+export function createListener(
+  config: SeimConfig,
+  deps: MiddlewareDeps,
+  behaviorMiddleware?: (req: any, res: any, next: () => void) => void
+): () => any {
   const { adapter, events, logger, worker } = deps;
 
   // Set up the worker processor — this runs optimization analysis off the request path
@@ -201,37 +205,45 @@ export function createListener(config: SeimConfig, deps: MiddlewareDeps): () => 
     );
 
     return (req: any, res: any, next: any) => {
-      if (req.path === '/seim/sensor.js') {
-        res.setHeader?.('Content-Type', 'application/javascript');
-        return res.send(SENSOR_CODE);
-      }
-
-      if (req.path === '/seim/telemetry' && req.method === 'POST') {
-        const body = req.body || {};
-        processTelemetry(config, deps, body, req);
-        res.status?.(200);
-        return res.json?.({ ok: true }) || res.send({ ok: true });
-      }
-
-      const originalSend = res.send;
-      res.send = function(body: any) {
-        const contentType = res.getHeader?.('content-type') || res.get?.('content-type') || '';
-        if (body && contentType.includes('text/html')) {
-          let html = typeof body === 'string' ? body : body.toString('utf8');
-          const overrides = frontendOverrides.get(req.path) || { css: '', js: '' };
-          const sensorScript = `<script src="/seim/sensor.js" defer></script>`;
-          const styleOverride = overrides.css ? `<style id="seim-overrides">${overrides.css}</style>` : '';
-          const jsOverride = overrides.js ? `<script id="seim-js-overrides">${overrides.js}</script>` : '';
-          
-          html = html.replace('</head>', `${styleOverride}${jsOverride}</head>`);
-          html = html.replace('</body>', `${sensorScript}</body>`);
-          
-          body = typeof body === 'string' ? html : Buffer.from(html, 'utf8');
+      const proceed = () => {
+        if (req.path === '/seim/sensor.js') {
+          res.setHeader?.('Content-Type', 'application/javascript');
+          return res.send(SENSOR_CODE);
         }
-        return originalSend.call(this, body);
+
+        if (req.path === '/seim/telemetry' && req.method === 'POST') {
+          const body = req.body || {};
+          processTelemetry(config, deps, body, req);
+          res.status?.(200);
+          return res.json?.({ ok: true }) || res.send({ ok: true });
+        }
+
+        const originalSend = res.send;
+        res.send = function(body: any) {
+          const contentType = res.getHeader?.('content-type') || res.get?.('content-type') || '';
+          if (body && contentType.includes('text/html')) {
+            let html = typeof body === 'string' ? body : body.toString('utf8');
+            const overrides = frontendOverrides.get(req.path) || { css: '', js: '' };
+            const sensorScript = `<script src="/seim/sensor.js" defer></script>`;
+            const styleOverride = overrides.css ? `<style id="seim-overrides">${overrides.css}</style>` : '';
+            const jsOverride = overrides.js ? `<script id="seim-js-overrides">${overrides.js}</script>` : '';
+            
+            html = html.replace('</head>', `${styleOverride}${jsOverride}</head>`);
+            html = html.replace('</body>', `${sensorScript}</body>`);
+            
+            body = typeof body === 'string' ? html : Buffer.from(html, 'utf8');
+          }
+          return originalSend.call(this, body);
+        };
+
+        innerMiddleware(req, res, next);
       };
 
-      innerMiddleware(req, res, next);
+      if (behaviorMiddleware) {
+        behaviorMiddleware(req, res, proceed);
+      } else {
+        proceed();
+      }
     };
   };
 }
@@ -365,8 +377,12 @@ const candidateLifecycle = new CandidateLifecycleManager();
  * Legacy Express-compatible listener for backward compatibility.
  * Uses the adapter layer internally.
  */
-export function createExpressListener(config: SeimConfig, deps: MiddlewareDeps): () => RequestHandler {
-  const innerListener = createListener(config, deps);
+export function createExpressListener(
+  config: SeimConfig,
+  deps: MiddlewareDeps,
+  behaviorMiddleware?: (req: any, res: any, next: () => void) => void
+): () => RequestHandler {
+  const innerListener = createListener(config, deps, behaviorMiddleware);
 
   return function listener(): RequestHandler {
     const middleware = innerListener();
