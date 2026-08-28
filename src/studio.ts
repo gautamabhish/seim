@@ -1,6 +1,24 @@
 import { Request, Response, RequestHandler } from 'express';
 import { SeimInstance } from './types';
 
+// Internal event ring-buffer per studio handler
+const studioEventLog: Array<{ ts: number; event: string; payload: any }> = [];
+const MAX_EVENTS = 100;
+
+/** Push an event into the studio event ring buffer (called from index.ts) */
+export function pushStudioEvent(event: string, payload: any): void {
+  studioEventLog.push({ ts: Date.now(), event, payload });
+  if (studioEventLog.length > MAX_EVENTS) studioEventLog.shift();
+}
+
+/**
+ * Create a studio dashboard handler.
+ *
+ * IMPORTANT: The returned handler closes over the `instance` object by reference.
+ * As long as the caller mutates the same object (not reassigns), all API endpoints
+ * will automatically see the fully-initialised instance — even if `app.use()` was
+ * called before `index.ts` finished wiring everything in.
+ */
 export function createStudioHandler(instance: SeimInstance): RequestHandler {
   return (req: Request, res: Response): void => {
     const p = req.path || req.url || '';
@@ -14,14 +32,61 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
       return;
     }
     if (p.endsWith('/api/candidates')) {
-      const candidates = instance?.candidateStore ? instance.candidateStore.listAll ? instance.candidateStore.listAll() : [] : [];
-      res.json(candidates);
+      // listAll() is async — must await
+      const store = instance?.candidateStore;
+      if (!store) { res.json([]); return; }
+      Promise.resolve(store.listAll ? store.listAll() : []).then((list: any[]) => {
+        res.json(list);
+      }).catch(() => res.json([]));
       return;
     }
     if (p.endsWith('/api/behavior')) {
       const snapshot = instance?.behaviorTracker ? instance.behaviorTracker.snapshot() : {};
       const components = instance?.reactRegistry ? instance.reactRegistry.listAll() : [];
       res.json({ ...snapshot, components });
+      return;
+    }
+    if (p.endsWith('/api/changelog')) {
+      const entries = instance?.changelog ? instance.changelog.getRecent(100) : [];
+      res.json(entries);
+      return;
+    }
+    if (p.endsWith('/api/issues')) {
+      const openIssues = instance?.issueStream ? instance.issueStream.getOpenIssues() : [];
+      const allIssues = instance?.issueStream ? instance.issueStream.getAllIssues() : [];
+      res.json({ open: openIssues, all: allIssues });
+      return;
+    }
+    if (p.endsWith('/api/evolve-issue') && req.method === 'POST') {
+      const body = req.body || {};
+      const issueId = body.issueId;
+      if (instance?.orchestrator && instance?.issueStream && issueId) {
+        const issue = instance.issueStream.getAllIssues().find((i: any) => i.id === issueId);
+        if (issue) {
+          instance.orchestrator.handleIssue(issue).then((ok: boolean) => {
+            res.json({ success: ok, message: ok ? 'Issue evolved & deployed successfully' : 'Evolution could not be completed' });
+          }).catch((err: any) => {
+            res.status(500).json({ success: false, error: err.message });
+          });
+          return;
+        }
+      }
+      res.status(400).json({ success: false, error: 'Issue not found or orchestrator unavailable' });
+      return;
+    }
+    if (p.endsWith('/api/dismiss-issue') && req.method === 'POST') {
+      const body = req.body || {};
+      const issueId = body.issueId;
+      if (instance?.issueStream && issueId) {
+        instance.issueStream.dismissIssue(issueId);
+        res.json({ success: true, message: 'Issue dismissed' });
+        return;
+      }
+      res.status(400).json({ success: false, error: 'issueId required' });
+      return;
+    }
+    if (p.endsWith('/api/events')) {
+      res.json(studioEventLog);
       return;
     }
     if (p.endsWith('/api/rollback') || p.endsWith('/rollback')) {
@@ -350,14 +415,49 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
 
     <!-- Navigation Tabs -->
     <div class="nav-tabs">
-      <button class="tab-btn active" onclick="switchTab('overview')">📊 Route Telemetry</button>
+      <button class="tab-btn active" onclick="switchTab('shipped')">🚀 Shipped Evolution</button>
+      <button class="tab-btn" onclick="switchTab('issues')">🔍 Issue Stream</button>
+      <button class="tab-btn" onclick="switchTab('overview')">📊 Route Telemetry</button>
       <button class="tab-btn" onclick="switchTab('optimizations')">🧬 Candidates & Diffs</button>
       <button class="tab-btn" onclick="switchTab('behavior')">🧠 Visitor Behavior & React</button>
+      <button class="tab-btn" onclick="switchTab('events')">⚡ Live Events</button>
       <button class="tab-btn" onclick="switchTab('developer')">🛠️ Raw JSON State</button>
     </div>
 
+    <!-- Tab 0: Shipped Evolution (Timeline) -->
+    <div id="tab-shipped" class="tab-content active">
+      <div class="explain-card">
+        <div class="explain-header">
+          <strong style="color: var(--accent-green);">🚀 Product Evolution Timeline (Shipped Automatically)</strong>
+          <span class="badge badge-green" id="shipped-count-badge">0 Changes Shipped</span>
+        </div>
+        <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1rem;">
+          Continuous changelog of autonomous features, runtime bug fixes, UX refinements, and performance upgrades shipped to production by SEIM.
+        </p>
+        <div id="changelog-list" style="display: flex; flex-direction: column; gap: 0.85rem;">
+          <div style="color: var(--text-muted); font-size: 0.85rem;">No autonomous changes shipped yet. Real-time visitor activity will trigger evolution.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 0.5: Issue Stream -->
+    <div id="tab-issues" class="tab-content">
+      <div class="explain-card">
+        <div class="explain-header">
+          <strong style="color: var(--accent-amber);">🔍 Detected Product Issues & Feature Opportunities</strong>
+          <span class="badge badge-amber" id="issues-count-badge">0 Open Issues</span>
+        </div>
+        <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1rem;">
+          Real-time stream of 5xx runtime bugs, missing API 404s, user drop-offs, and circular navigation loops detected across user sessions.
+        </p>
+        <div id="issues-list" style="display: flex; flex-direction: column; gap: 0.85rem;">
+          <div style="color: var(--text-muted); font-size: 0.85rem;">No open issues detected across active visitor sessions.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Tab 1: Overview -->
-    <div id="tab-overview" class="tab-content active">
+    <div id="tab-overview" class="tab-content">
       <div class="table-container">
         <table>
           <thead>
@@ -417,7 +517,24 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
       </div>
     </div>
 
-    <!-- Tab 4: Developer JSON -->
+    <!-- Tab 4: Live Events -->
+    <div id="tab-events" class="tab-content">
+      <div class="explain-card">
+        <div class="explain-header">
+          <strong style="color: var(--accent-green);">Live Optimization & Lifecycle Events</strong>
+          <span class="badge badge-green" id="events-count-badge">0 Events</span>
+        </div>
+        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1rem;">
+          Real-time stream of SEIM lifecycle events — optimization detections, promotions, rollbacks, feature discoveries, and errors.
+          Events are kept in a ring buffer (last 100).
+        </p>
+        <div id="events-log" style="display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.82rem; font-family: monospace; max-height: 400px; overflow-y: auto;">
+          <div style="color: var(--text-muted);">Waiting for events...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 5: Developer JSON -->
     <div id="tab-developer" class="tab-content">
       <pre id="json-viewer">Loading state...</pre>
     </div>
@@ -491,29 +608,133 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
       }
     }
 
+    async function triggerEvolveIssue(issueId) {
+      try {
+        const res = await fetch(studioPath + '/api/evolve-issue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issueId })
+        }).then(r => r.json());
+        alert(res.message || (res.success ? 'Evolution started/completed!' : 'Evolution failed: ' + res.error));
+        updateDashboard();
+      } catch (err) {
+        alert('Evolve error: ' + err.message);
+      }
+    }
+
+    async function triggerDismissIssue(issueId) {
+      try {
+        const res = await fetch(studioPath + '/api/dismiss-issue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issueId })
+        }).then(r => r.json());
+        updateDashboard();
+      } catch (err) {
+        alert('Dismiss error: ' + err.message);
+      }
+    }
+
     async function updateDashboard() {
       try {
-        const [statusRes, metricsRes, candidatesRes, behaviorRes] = await Promise.all([
+        const [statusRes, metricsRes, candidatesRes, behaviorRes, eventsRes, changelogRes, issuesRes] = await Promise.all([
           fetch(studioPath + '/api/status').then(r => r.json()).catch(() => ({})),
           fetch(studioPath + '/api/metrics').then(r => r.json()).catch(() => ({})),
           fetch(studioPath + '/api/candidates').then(r => r.json()).catch(() => ([])),
-          fetch(studioPath + '/api/behavior').then(r => r.json()).catch(() => ({}))
+          fetch(studioPath + '/api/behavior').then(r => r.json()).catch(() => ({})),
+          fetch(studioPath + '/api/events').then(r => r.json()).catch(() => ([])),
+          fetch(studioPath + '/api/changelog').then(r => r.json()).catch(() => ([])),
+          fetch(studioPath + '/api/issues').then(r => r.json()).catch(() => ({ open: [], all: [] }))
         ]);
 
         const status = statusRes.status || statusRes || {};
         const metrics = metricsRes || {};
         currentCandidates = candidatesRes || [];
         const behavior = behaviorRes || {};
+        const events = Array.isArray(eventsRes) ? eventsRes : [];
+        const changelog = Array.isArray(changelogRes) ? changelogRes : [];
+        const openIssues = issuesRes.open || [];
 
         // Update stats
         document.getElementById('val-opts').textContent = status.totalOptimizationsGenerated || 0;
         document.getElementById('val-versions').textContent = status.totalOptimizationsPromoted || 0;
         document.getElementById('val-rollbacks').textContent = status.totalRollbacks || 0;
         document.getElementById('candidate-count-badge').textContent = currentCandidates.length + ' Candidates';
+        document.getElementById('events-count-badge').textContent = events.length + ' Events';
+        document.getElementById('shipped-count-badge').textContent = changelog.length + ' Changes Shipped';
+        document.getElementById('issues-count-badge').textContent = openIssues.length + ' Open Issues';
+
+        // 1. Render Shipped Evolution Timeline
+        const changelogContainer = document.getElementById('changelog-list');
+        if (changelog.length === 0) {
+          changelogContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">No autonomous changes shipped yet. Real-time visitor activity will trigger evolution.</div>';
+        } else {
+          const typeColors = {
+            'new_feature': '#10b981',
+            'optimization': '#38bdf8',
+            'bug_fix': '#a855f7',
+            'ux_improvement': '#f59e0b',
+            'rollback': '#f43f5e',
+          };
+          changelogContainer.innerHTML = changelog.map(item => {
+            const color = typeColors[item.type] || '#9ca3af';
+            const time = new Date(item.shippedAt).toLocaleString();
+            const isLive = item.status === 'live';
+            const hasCode = !!(item.code || item.diff);
+
+            return \`
+              <div style="padding: 1rem; background: var(--bg-dark); border-radius: 0.5rem; border-left: 4px solid \${color}; border-top: 1px solid var(--card-border); border-right: 1px solid var(--card-border); border-bottom: 1px solid var(--card-border);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                  <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-weight: 700; color: \${color}; font-size: 0.95rem;">\${item.title}</span>
+                    <span class="badge \${isLive ? 'badge-green' : 'badge-blue'}">\${isLive ? '🟢 Live in Production' : '↩️ Rolled Back'}</span>
+                  </div>
+                  <span style="color: var(--text-muted); font-size: 0.75rem;">\${time}</span>
+                </div>
+                <div style="color: var(--text-main); font-size: 0.85rem; line-height: 1.4; margin-bottom: 0.5rem;">\${item.description}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; color: var(--text-muted);">
+                  <span>Path: <code style="color: var(--accent-blue);">\${item.path}</code> \${item.affectedSessions ? '• Affected: ' + item.affectedSessions + ' sessions' : ''}</span>
+                  <div style="display: flex; gap: 0.5rem;">
+                    \${hasCode ? \`<button onclick="openDiffModal('Code: \${item.title}', decodeURIComponent('\${encodeURIComponent(item.code || item.diff || '')}'))" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: var(--card-border); border: none; color: var(--text-main); border-radius: 0.25rem; cursor: pointer;">View Code</button>\` : ''}
+                    \${isLive ? \`<button onclick="triggerRollback('\${item.path}')" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: rgba(244, 63, 94, 0.2); border: 1px solid var(--accent-rose); color: var(--accent-rose); border-radius: 0.25rem; cursor: pointer;">Rollback</button>\` : ''}
+                  </div>
+                </div>
+              </div>
+            \`;
+          }).join('');
+        }
+
+        // 2. Render Open Issues Stream
+        const issuesContainer = document.getElementById('issues-list');
+        if (openIssues.length === 0) {
+          issuesContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">No open issues detected across active visitor sessions. All systems healthy.</div>';
+        } else {
+          issuesContainer.innerHTML = openIssues.map(iss => {
+            const isCrit = iss.severity === 'critical' || iss.severity === 'high';
+            const sevColor = isCrit ? 'var(--accent-rose)' : 'var(--accent-amber)';
+
+            return \`
+              <div style="padding: 1rem; background: var(--bg-dark); border-radius: 0.5rem; border: 1px solid var(--card-border); display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                <div style="flex: 1; min-width: 0;">
+                  <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                    <span style="font-weight: 600; color: \${sevColor}; font-size: 0.9rem;">[\${iss.type.toUpperCase()}] \${iss.path}</span>
+                    <span class="badge \${isCrit ? 'badge-blue' : 'badge-amber'}">\${iss.severity}</span>
+                    <span style="color: var(--text-muted); font-size: 0.75rem;">\${iss.affectedSessions} sessions affected</span>
+                  </div>
+                  <div style="color: var(--text-main); font-size: 0.85rem;">\${iss.suggestedAction}</div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; flex-shrink: 0;">
+                  <button onclick="triggerEvolveIssue('\${iss.id}')" style="padding: 0.35rem 0.8rem; font-size: 0.8rem; background: rgba(16, 185, 129, 0.2); border: 1px solid var(--accent-green); color: var(--accent-green); border-radius: 0.375rem; cursor: pointer; font-weight: 600;">⚡ Evolve Now</button>
+                  <button onclick="triggerDismissIssue('\${iss.id}')" style="padding: 0.35rem 0.6rem; font-size: 0.8rem; background: var(--card-border); border: none; color: var(--text-muted); border-radius: 0.375rem; cursor: pointer;">Dismiss</button>
+                </div>
+              </div>
+            \`;
+          }).join('');
+        }
 
         // Render Routes Table
         const tbody = document.getElementById('routes-tbody');
-        const routes = Object.keys(metrics);
+        const routes = Object.keys(metrics.routes || metrics);
 
         if (routes.length === 0) {
           tbody.innerHTML = \`
@@ -525,17 +746,17 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
           \`;
         } else {
           tbody.innerHTML = routes.map(routeKey => {
-            const r = metrics[routeKey];
+            const r = (metrics.routes || metrics)[routeKey];
             const avg = r.requestCount ? Math.round(r.totalDuration / r.requestCount) : 0;
             const activeVer = (status.activeVersions || []).find(v => v.routeKey === routeKey);
-            const isPromoted = activeVer && activeVer.active;
+            const isPromoted = activeVer && activeVer.active === 'optimized';
 
             return \`
               <tr>
                 <td style="font-weight: 600; color: var(--accent-blue);">\${routeKey}</td>
                 <td>\${r.requestCount || 0} reqs</td>
                 <td>\${avg} ms</td>
-                <td><span class="badge \${isPromoted ? 'badge-purple' : 'badge-blue'}">\${isPromoted ? 'Evolved v2' : 'Original v1'}</span></td>
+                <td><span class="badge \${isPromoted ? 'badge-purple' : 'badge-blue'}">\${isPromoted ? '🧬 Evolved' : '📌 Original'}</span></td>
                 <td><span class="badge badge-green">🟢 Active</span></td>
                 <td>
                   <button onclick="triggerPromote('\${routeKey}')" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: rgba(168, 85, 247, 0.2); border: 1px solid var(--accent-purple); color: var(--accent-purple); border-radius: 0.25rem; cursor: pointer; margin-right: 0.4rem;">Promote</button>
@@ -581,8 +802,44 @@ export function createStudioHandler(instance: SeimInstance): RequestHandler {
           \`).join('');
         }
 
+        // Render Live Events
+        const eventsLog = document.getElementById('events-log');
+        if (events.length === 0) {
+          eventsLog.innerHTML = '<div style="color: var(--text-muted);">Waiting for events... (events appear as SEIM detects optimization opportunities, promotes candidates, or encounters errors)</div>';
+        } else {
+          const eventColors = {
+            'optimization:detected': '#f59e0b',
+            'optimization:promoted': '#10b981',
+            'optimization:rejected': '#f43f5e',
+            'optimization:rolledback': '#f43f5e',
+            'feature:discovered': '#a855f7',
+            'feature:deployed': '#10b981',
+            'frontend:component_generated': '#38bdf8',
+            'frontend:evolved': '#38bdf8',
+            'issue:detected': '#f59e0b',
+            'issue:resolved': '#10b981',
+            'metrics:threshold': '#f59e0b',
+            'error:sandbox': '#f43f5e',
+            'error:validation': '#f43f5e',
+            'lifecycle:started': '#10b981',
+          };
+          eventsLog.innerHTML = [...events].reverse().map(e => {
+            const color = eventColors[e.event] || '#9ca3af';
+            const time = new Date(e.ts).toLocaleTimeString();
+            return \`
+              <div style="padding: 0.5rem 0.75rem; background: var(--bg-dark); border-radius: 0.375rem; border-left: 3px solid \${color}; display: flex; gap: 0.75rem; align-items: flex-start;">
+                <span style="color: var(--text-muted); font-size: 0.75rem; white-space: nowrap; padding-top: 1px;">\${time}</span>
+                <div style="flex: 1; min-width: 0;">
+                  <span style="color: \${color}; font-weight: 600;">\${e.event}</span>
+                  <span style="color: var(--text-muted); margin-left: 0.5rem; font-size: 0.78rem;">\${e.payload?.routeKey || e.payload?.path || e.payload?.title || ''}</span>
+                </div>
+              </div>
+            \`;
+          }).join('');
+        }
+
         // Render Raw JSON
-        document.getElementById('json-viewer').textContent = JSON.stringify({ status, metrics, behavior }, null, 2);
+        document.getElementById('json-viewer').textContent = JSON.stringify({ status, metrics, behavior, changelog: changelog.slice(0, 20), openIssues, recentEvents: events.slice(-20) }, null, 2);
 
       } catch (err) {
         console.error('Failed to update dashboard', err);

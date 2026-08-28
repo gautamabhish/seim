@@ -16,7 +16,7 @@ import { DynamicRouter } from './dynamicRouter';
 import { PersistentVersionManager } from './persistentVersionManager';
 import { createStorageAdapter } from './storageFactory';
 import { createExpressListener, createListener } from './middleware';
-import { createStudioHandler } from './studio';
+import { createStudioHandler, pushStudioEvent } from './studio';
 import { createAdapter } from './adapters';
 import { SeimEventBus } from './events';
 import { Logger } from './logger';
@@ -41,11 +41,15 @@ import { VariantRegistry, HandlerVariant } from './variantRegistry';
 import { CandidateStore, MemoryCandidateStore, FileCandidateStore, PersistedCandidate, CandidateTransition } from './candidateStore';
 import { ArtifactStore, MemoryArtifactStore, FileArtifactStore, EvolutionArtifact } from './artifactStore';
 
-// New Feature imports
+// Autonomous Product Evolution imports
 import { BehaviorTracker } from './behaviorTracker';
 import { FeatureDiscovery } from './featureDiscovery';
 import { ReactComponentRegistry, ReactComponentGenerator } from './react';
 import { CustomPatternRegistry } from './customPatternRegistry';
+import { IssueStream, ProductIssue, IssueType } from './issueStream';
+import { FrontendEvolver, FrontendChange } from './frontendEvolver';
+import { ProductChangelog, ChangelogEntry } from './productChangelog';
+import { EvolutionOrchestrator } from './evolutionOrchestrator';
 
 export * from './types';
 export { mergeConfig } from './config';
@@ -64,6 +68,10 @@ export { BehaviorTracker } from './behaviorTracker';
 export { FeatureDiscovery } from './featureDiscovery';
 export { ReactComponentRegistry, ReactComponentGenerator } from './react';
 export { CustomPatternRegistry } from './customPatternRegistry';
+export { IssueStream, ProductIssue, IssueType } from './issueStream';
+export { FrontendEvolver, FrontendChange } from './frontendEvolver';
+export { ProductChangelog, ChangelogEntry } from './productChangelog';
+export { EvolutionOrchestrator } from './evolutionOrchestrator';
 export type { CustomPattern, PatternDetector, PatternFixer } from './customPatternRegistry';
 export type { ReactComponent, FrontendRouteConfig, ComponentRequest } from './react';
 
@@ -159,6 +167,14 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   const customPatternRegistry = new CustomPatternRegistry();
   optimization.setCustomPatternRegistry(customPatternRegistry);
 
+  // Autonomous Product Evolution System
+  const changelog = new ProductChangelog(config.changelog?.persistPath || storagePath);
+  const frontendEvolver = new FrontendEvolver(reactGenerator, reactRegistry, config, events, logger);
+  const issueStream = new IssueStream(behaviorTracker, metrics, config, events, logger);
+  const orchestrator = new EvolutionOrchestrator(
+    issueStream, scaffolder, frontendEvolver, changelog, dynamicRouter, sandbox, config, events, logger
+  );
+
   // Load persisted state on startup
   versionManager.loadAllStates().catch((err: Error) => {
     logger.warn('Failed to load persisted version state', { error: err.message });
@@ -179,6 +195,12 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
     driftDetector.start();
   }
 
+  // Start autonomous product evolution issue stream & orchestrator
+  if (config.behavior?.enabled !== false) {
+    issueStream.start();
+    orchestrator.start();
+  }
+
   // Wire learning into the optimization lifecycle via events
   events.on('optimization:promoted', async (payload: any) => {
     const { routeKey, candidateId, latencyImprovement } = payload;
@@ -192,6 +214,17 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
       routeKey,
       candidateCode: winner?.code,
       originalCode: winner?.originalCode,
+    });
+
+    // Record in product changelog
+    changelog.record({
+      type: 'optimization',
+      title: `Optimized Route: ${routeKey}`,
+      description: `Autonomous latency improvement of ${Math.round(latencyImprovement)}ms (${pattern} - ${strategy})`,
+      path: routeKey,
+      code: winner?.code,
+      latencyImprovement: `${Math.round(latencyImprovement)}ms`,
+      status: 'live',
     });
 
     // Extract pattern from AI-generated fixes for future reuse
@@ -242,6 +275,7 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
   events.on('optimization:rolledback', (payload: any) => {
     const { routeKey } = payload;
     driftDetector.removeBaseline(routeKey);
+    changelog.rollback(routeKey, 'Performance regression detected in production');
   });
 
   logger.info('SEIM initialized', {
@@ -286,10 +320,13 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
     }
   }
 
+  const behaviorMiddleware = config.behavior?.enabled !== false ? behaviorTracker.middleware() : undefined;
+
+  // Build instance object — note: dashboard is set AFTER so the handler closes over the real instance
   const instance: SeimInstance = {
-    listener: createExpressListener(config, deps),
-    plugin: adapter.name === 'fastify' ? () => createListener(config, deps)() : undefined,
-    dashboard: createStudioHandler({} as any),
+    listener: createExpressListener(config, deps, behaviorMiddleware),
+    plugin: adapter.name === 'fastify' ? () => createListener(config, deps, behaviorMiddleware)() : undefined,
+    dashboard: null as any, // set below after instance is built
     status: (): SeimStatus => {
       const workerHealthy = worker.isRunning();
 
@@ -306,7 +343,7 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
         healthy: workerHealthy,
         components: {
           worker: workerHealthy,
-          storage: true, // TODO: add storage.isHealthy() check
+          storage: true,
           ai: config.ai.enabled,
           evolution: config.evolution?.enabled !== false,
         },
@@ -320,6 +357,8 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
       learning.destroy();
       metrics.destroy();
       behaviorTracker.destroy();
+      issueStream.destroy();
+      orchestrator.destroy();
       if (behaviorDiscoveryTimer) {
         clearInterval(behaviorDiscoveryTimer);
         behaviorDiscoveryTimer = null;
@@ -377,16 +416,29 @@ export default function seim(userConfig: Partial<SeimConfig> = {}): SeimInstance
     featureDiscovery,
     reactRegistry,
     reactGenerator,
+    issueStream,
+    orchestrator,
+    frontendEvolver,
+    changelog,
   };
 
-  // Wire up studio dashboard with the real instance
+  // Wire up studio dashboard ONCE with the fully-built instance (single source of truth)
   instance.dashboard = createStudioHandler(instance);
 
-  // Attach behavior tracking middleware if enabled (Express only for now)
-  if (config.behavior?.enabled) {
-    const behaviorMiddleware = behaviorTracker.middleware();
-    const baseListener = instance.listener as any;
-    // Wrap the existing listener to prepend behavior middleware
+  // Wire key lifecycle events into studio event log so /api/events shows real activity
+  const studioEvents = [
+    'optimization:detected', 'optimization:promoted', 'optimization:rejected',
+    'optimization:rolledback', 'feature:discovered', 'feature:deployed',
+    'frontend:component_generated', 'frontend:evolved', 'issue:detected',
+    'issue:resolved', 'metrics:threshold', 'error:sandbox', 'error:validation',
+    'lifecycle:started',
+  ];
+  for (const ev of studioEvents) {
+    events.on(ev, (payload: any) => pushStudioEvent(ev, payload));
+  }
+
+  // Prepend behavior tracking middleware if enabled
+  if (config.behavior?.enabled !== false && behaviorMiddleware) {
     (instance as any)._behaviorMiddleware = behaviorMiddleware;
     logger.info('[BehaviorTracker] Behavior tracking middleware active');
   }
