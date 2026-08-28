@@ -1,0 +1,18 @@
+# SEIM — Cursor & Codex Agent Rules
+
+## Project Context
+SEIM (Self-Evolving Infrastructure Middleware) is an autonomous, full-stack self-evolving middleware for Node.js (Express/Fastify) and React.
+
+## Core Rules for Codex / Cursor Agents
+1. **Middleware Placement:** In Express applications, `app.use(s.listener())` must always be mounted BEFORE application routes to capture metrics and user journeys.
+2. **Type Safety:** All source code in `src/` must compile with strict TypeScript (`npm run build`). Avoid `any` where concrete interfaces exist in `src/types.ts`.
+3. **Safety & Sandboxing:** Never bypass the `SecurityGate` (`src/security.ts`). Candidate code modifying credentials, authorization, payments, or accessing `process.env` must be rejected.
+4. **Non-Destructive Frontend Generation:** Write generated React components to `src/seim-generated/` and maintain `seim-routes.tsx`. Do not overwrite user-authored routes outside the designated directory.
+5. **Testing Requirement:** Always verify changes by running `npm test`. All 26 test suites must pass before declaring work complete.
+
+## Quick Reference
+- Main Entry: `src/index.ts`
+- Issue Stream: `src/issueStream.ts`
+- Evolution Orchestrator: `src/evolutionOrchestrator.ts`
+- Frontend Evolver: `src/frontendEvolver.ts`
+- Product Changelog: `src/productChangelog.ts`
